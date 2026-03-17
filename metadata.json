@@ -1,0 +1,7 @@
+{
+  "name": "Dormazon",
+  "description": "A campus second-hand trading platform for Cornell Tech students, focusing on departure-date-driven pricing and efficiency. Now responsive for mobile and desktop.",
+  "requestFramePermissions": [
+    "camera"
+  ]
+}
