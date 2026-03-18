@@ -11,8 +11,10 @@
         "photoURL": { "type": "string" },
         "isStudent": { "type": "boolean" },
         "dormLocation": { "type": "string" },
-        "transactionCount": { "type": "number" },
-        "favorites": { "type": "array", "items": { "type": "string" } }
+        "salesCount": { "type": "number" },
+        "purchasesCount": { "type": "number" },
+        "favorites": { "type": "array", "items": { "type": "string" } },
+        "cart": { "type": "array", "items": { "type": "string" } }
       },
       "required": ["uid", "email"]
     },
@@ -27,7 +29,8 @@
         "lastMessageAt": { "type": "string", "format": "date-time" },
         "productId": { "type": "string" },
         "productTitle": { "type": "string" },
-        "productImage": { "type": "string" }
+        "productImage": { "type": "string" },
+        "unreadBy": { "type": "array", "items": { "type": "string" } }
       },
       "required": ["participants", "productId"]
     },
@@ -38,6 +41,8 @@
       "properties": {
         "id": { "type": "string" },
         "senderId": { "type": "string" },
+        "senderName": { "type": "string" },
+        "senderAvatar": { "type": "string" },
         "text": { "type": "string" },
         "createdAt": { "type": "string", "format": "date-time" }
       },

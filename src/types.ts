@@ -5,8 +5,14 @@ export interface UserProfile {
   photoURL?: string;
   isStudent?: boolean;
   dormLocation?: string;
-  transactionCount?: number;
+  salesCount?: number;
+  purchasesCount?: number;
+  followersCount?: number;
+  avgResponseTime?: string;
   favorites?: string[];
+  cart?: string[];
+  bio?: string;
+  majorInfo?: string;
 }
 
 export interface ChatRoom {
@@ -17,11 +23,14 @@ export interface ChatRoom {
   productId: string;
   productTitle: string;
   productImage: string;
+  unreadBy?: string[];
 }
 
 export interface Message {
   id: string;
   senderId: string;
+  senderName?: string;
+  senderAvatar?: string;
   text: string;
   createdAt: string;
 }
@@ -38,7 +47,8 @@ export interface Product {
   sellerName: string;
   sellerAvatar?: string;
   sellerIsStudent?: boolean;
-  sellerTransactionCount?: number;
+  sellerSalesCount?: number;
+  sellerPurchasesCount?: number;
   dormLocation: string;
   departureDate: string;
   referenceLink?: string;
@@ -48,6 +58,7 @@ export interface Product {
   deliveredAt?: string;
   completedAt?: string;
   createdAt: string;
+  sellerNotified?: boolean;
 }
 
-export type View = "home" | "sell" | "profile" | "favorites" | "chat" | "chat_room" | "detail" | "settings" | "orders";
+export type View = "home" | "sell" | "profile" | "favorites" | "chat" | "chat_room" | "detail" | "settings" | "orders" | "cart" | "seller_shop";

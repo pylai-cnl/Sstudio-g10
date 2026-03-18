@@ -31,7 +31,8 @@ import {
   Clock,
   CheckCircle,
   XCircle,
-  Truck
+  Truck,
+  Store
 } from "lucide-react";
 import { motion, AnimatePresence } from "motion/react";
 import { 
@@ -56,7 +57,8 @@ import {
   getDoc,
   setDoc,
   getDocFromServer,
-  increment
+  increment,
+  arrayUnion
 } from "firebase/firestore";
 import { ref, uploadBytes, getDownloadURL } from "firebase/storage";
 import { auth, db, storage } from "./firebase";
@@ -68,17 +70,59 @@ function cn(...inputs: ClassValue[]) {
   return twMerge(clsx(inputs));
 }
 
+const compressImage = async (file: File, maxWidth = 600, maxHeight = 600, quality = 0.5): Promise<string> => {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.readAsDataURL(file);
+    reader.onload = (event) => {
+      const img = new Image();
+      img.src = event.target?.result as string;
+      img.onload = () => {
+        const canvas = document.createElement('canvas');
+        let width = img.width;
+        let height = img.height;
+
+        if (width > height) {
+          if (width > maxWidth) {
+            height *= maxWidth / width;
+            width = maxWidth;
+          }
+        } else {
+          if (height > maxHeight) {
+            width *= maxHeight / height;
+            height = maxHeight;
+          }
+        }
+
+        canvas.width = width;
+        canvas.height = height;
+        const ctx = canvas.getContext('2d');
+        if (ctx) {
+          ctx.fillStyle = "white";
+          ctx.fillRect(0, 0, width, height);
+          ctx.drawImage(img, 0, 0, width, height);
+        }
+        resolve(canvas.toDataURL('image/jpeg', quality));
+      };
+      img.onerror = () => reject(new Error("Failed to load image for processing"));
+    };
+    reader.onerror = () => reject(new Error("Failed to read file"));
+  });
+};
+
 const CATEGORIES = ["All", "Textbooks", "Furniture", "Electronics", "Lighting", "Kitchen", "Others"];
 const CONDITIONS = ["Brand New", "Like New", "Used - Good", "Used - Fair"];
 
 interface HomeViewProps {
   key?: string;
   products: Product[];
+  users: Record<string, UserProfile>;
   selectedCategory: string;
   onSelectCategory: (c: string) => void;
   onSelectProduct: (p: Product) => void;
   favorites: string[];
   onToggleFavorite: (id: string) => void;
+  onViewSellerShop: (sellerId: string) => void;
 }
 
 interface SellViewProps {
@@ -92,46 +136,55 @@ interface ProfileViewProps {
   key?: string;
   profile: UserProfile | null;
   products: Product[];
+  users: Record<string, UserProfile>;
   onLogout: () => void;
   onSelectProduct: (p: Product) => void;
   favorites: string[];
   onToggleFavorite: (id: string) => void;
   onManageOrders: () => void;
+  onUpdateProfile: (data: Partial<UserProfile>) => Promise<void>;
 }
 
 interface ProductDetailViewProps {
   key?: string;
   product: Product;
+  users: Record<string, UserProfile>;
   currentUser: FirebaseUser | null;
   onBack: () => void;
   onStatusChange: (id: string, status: Product["status"]) => void;
   onDelete: (id: string) => Promise<void>;
   onUpdate: (id: string, data: Partial<Product>) => Promise<void>;
   onContactSeller: (product: Product) => void;
-  onBuyNow: (product: Product) => void;
+  onAddToCart: (product: Product) => void;
   isOwner: boolean;
   showAlert: (title: string, message: string) => void;
   isFavorite: boolean;
   onToggleFavorite: (id: string) => void;
   sellerTransactionCount: number;
+  onViewSellerShop: (sellerId: string) => void;
 }
 
 interface ManageOrdersViewProps {
   key?: string;
   products: Product[];
+  users: Record<string, UserProfile>;
   chatRooms: ChatRoom[];
   currentUser: FirebaseUser | null;
   onBack: () => void;
   onSelectProduct: (p: Product) => void;
   showAlert: (title: string, message: string) => void;
+  onSendSystemMessage: (productId: string, sellerId: string, buyerId: string, text: string) => Promise<void>;
+  onViewSellerShop: (sellerId: string) => void;
 }
 
 interface ProductCardProps {
   key?: string;
   product: Product;
+  users: Record<string, UserProfile>;
   onClick: () => void;
   isFavorite: boolean;
   onToggleFavorite: (id: string) => void;
+  onViewSellerShop: (sellerId: string) => void;
 }
 
 // --- Error Handling ---
@@ -252,10 +305,13 @@ function AppContent() {
   const [profile, setProfile] = useState<UserProfile | null>(null);
   const [view, setView] = useState<View>("home");
   const [products, setProducts] = useState<Product[]>([]);
+  const [users, setUsers] = useState<Record<string, UserProfile>>({});
   const [searchQuery, setSearchQuery] = useState("");
   const [selectedCategory, setSelectedCategory] = useState("All");
   const [selectedProduct, setSelectedProduct] = useState<Product | null>(null);
   const [selectedChatRoom, setSelectedChatRoom] = useState<ChatRoom | null>(null);
+  const [selectedSellerId, setSelectedSellerId] = useState<string | null>(null);
+  const [showSellOptions, setShowSellOptions] = useState(false);
   const [chatRooms, setChatRooms] = useState<ChatRoom[]>([]);
   const [loading, setLoading] = useState(true);
   const [modalConfig, setModalConfig] = useState<{
@@ -327,14 +383,22 @@ function AppContent() {
               photoURL: user.photoURL || "",
               isStudent: isStudent,
               dormLocation: "Cornell Tech House",
-              transactionCount: 0,
-              favorites: []
+              salesCount: 0,
+              purchasesCount: 0,
+              favorites: [],
+              cart: []
             };
             await setDoc(userDocRef, newProfile);
             setProfile({ uid: user.uid, ...newProfile } as UserProfile);
           } else {
             console.log("Profile already exists");
-            setProfile({ uid: user.uid, ...userDoc.data() } as UserProfile);
+            const existingData = userDoc.data();
+            // Keep photoURL in sync with Google if available
+            if (user.photoURL && existingData.photoURL !== user.photoURL) {
+              console.log("Updating photoURL from Google");
+              await updateDoc(userDocRef, { photoURL: user.photoURL });
+            }
+            setProfile({ uid: user.uid, ...existingData, ...(user.photoURL ? { photoURL: user.photoURL } : {}) } as UserProfile);
           }
 
           profileUnsubscribe = onSnapshot(userDocRef, (doc) => {
@@ -357,6 +421,13 @@ function AppContent() {
               return dateB - dateA;
             });
             setChatRooms(rooms);
+            
+            // Update selected chat room if it exists
+            setSelectedChatRoom(prev => {
+              if (!prev) return null;
+              const updated = rooms.find(r => r.id === prev.id);
+              return updated || prev;
+            });
           }, (error) => {
             console.error("Chat rooms snapshot error:", error);
           });
@@ -380,6 +451,26 @@ function AppContent() {
     };
   }, []);
 
+  // Users Listener
+  useEffect(() => {
+    if (!user) {
+      setUsers({});
+      return;
+    }
+    const q = collection(db, "users");
+    const unsubscribe = onSnapshot(q, (snapshot) => {
+      console.log(`Users snapshot received: ${snapshot.size} users`);
+      const usersMap: Record<string, UserProfile> = {};
+      snapshot.docs.forEach(doc => {
+        usersMap[doc.id] = { uid: doc.id, ...doc.data() } as UserProfile;
+      });
+      setUsers(usersMap);
+    }, (error) => {
+      console.error("Users snapshot error:", error);
+    });
+    return unsubscribe;
+  }, [user?.uid]);
+
   // Products Listener
   useEffect(() => {
     const q = query(collection(db, "products"), orderBy("createdAt", "desc"));
@@ -398,6 +489,8 @@ function AppContent() {
   const handleViewChange = (newView: View) => {
     console.log(`View changing from ${view} to ${newView}`);
     setView(newView);
+    setShowSellOptions(false);
+    window.scrollTo(0, 0);
   };
 
   const filteredProducts = useMemo(() => {
@@ -422,6 +515,14 @@ function AppContent() {
     }
   };
 
+  const unreadChatCount = useMemo(() => 
+    chatRooms.filter(room => room.unreadBy?.includes(user?.uid)).length,
+  [chatRooms, user?.uid]);
+
+  const unhandledOrderCount = useMemo(() => 
+    products.filter(p => p.sellerId === user?.uid && p.sellerNotified === false).length,
+  [products, user?.uid]);
+
   const handleLogout = () => signOut(auth);
 
   const toggleFavorite = async (productId: string) => {
@@ -435,6 +536,132 @@ function AppContent() {
       await updateDoc(doc(db, "users", user.uid), { favorites: newFavorites });
     } catch (error) {
       console.error("Failed to toggle favorite:", error);
+    }
+  };
+
+  const addToCart = async (productId: string) => {
+    if (!user || !profile) return;
+    const cart = profile.cart || [];
+    if (cart.includes(productId)) {
+      showAlert("Already in Cart", "This item is already in your shopping cart.");
+      return;
+    }
+    const newCart = [...cart, productId];
+    try {
+      await updateDoc(doc(db, "users", user.uid), { cart: newCart });
+      showAlert("Added to Cart", "Item has been added to your shopping cart.");
+    } catch (error) {
+      console.error("Failed to add to cart:", error);
+    }
+  };
+
+  const removeFromCart = async (productId: string) => {
+    if (!user || !profile) return;
+    const cart = profile.cart || [];
+    const newCart = cart.filter(id => id !== productId);
+    try {
+      await updateDoc(doc(db, "users", user.uid), { cart: newCart });
+    } catch (error) {
+      console.error("Failed to remove from cart:", error);
+    }
+  };
+
+  const checkout = async () => {
+    if (!user || !profile || !profile.cart || profile.cart.length === 0) return;
+    
+    const cartProducts = products.filter(p => profile.cart?.includes(p.id) && p.status === "Still on");
+    
+    if (cartProducts.length === 0) {
+      showAlert("Cart Empty", "No available items in your cart to checkout.");
+      return;
+    }
+
+    showConfirm({
+      title: "Confirm Checkout",
+      message: `Are you sure you want to checkout ${cartProducts.length} items? Total: $${cartProducts.reduce((sum, p) => sum + p.price, 0)}`,
+      confirmText: "Checkout",
+      onConfirm: async () => {
+        try {
+          // Update each product status to Pending
+          const promises = cartProducts.map(p => 
+            updateDoc(doc(db, "products", p.id), {
+              status: "Pending",
+              buyerId: user.uid,
+              buyerName: profile.displayName,
+              sellerNotified: false
+            })
+          );
+          await Promise.all(promises);
+          
+          // Send system messages to sellers
+          for (const p of cartProducts) {
+            await sendSystemMessage(
+              p.id, 
+              p.sellerId, 
+              user.uid, 
+              `Your item "${p.title}" has been purchased by ${profile.displayName}. Please check your orders.`
+            );
+          }
+          
+          // Clear cart
+          await updateDoc(doc(db, "users", user.uid), { cart: [] });
+          
+          showAlert("Success!", "Your orders have been placed. Sellers will be notified.");
+          handleViewChange("orders");
+        } catch (error) {
+          console.error("Checkout failed:", error);
+          showAlert("Error", "Failed to complete checkout. Please try again.");
+        }
+      }
+    });
+  };
+
+  const sendSystemMessage = async (productId: string, sellerId: string, buyerId: string, text: string) => {
+    try {
+      const product = products.find(p => p.id === productId);
+      if (!product) return;
+
+      // Check if room already exists
+      let room = chatRooms.find(r => 
+        r.productId === productId && 
+        r.participants.includes(sellerId) && 
+        r.participants.includes(buyerId)
+      );
+
+      let roomId = room?.id;
+
+      if (!room) {
+        // Create new room
+        const roomData = {
+          participants: [sellerId, buyerId],
+          productId: productId,
+          productTitle: product.title,
+          productImage: product.images?.[0] || "",
+          lastMessage: text,
+          lastMessageAt: new Date().toISOString(),
+          unreadBy: [sellerId, buyerId] // Both might need to see it
+        };
+        const docRef = await addDoc(collection(db, "chatRooms"), roomData);
+        roomId = docRef.id;
+      } else {
+        // Update existing room
+        await updateDoc(doc(db, "chatRooms", room.id), {
+          lastMessage: text,
+          lastMessageAt: new Date().toISOString(),
+          unreadBy: arrayUnion(sellerId, buyerId)
+        });
+      }
+
+      if (roomId) {
+        await addDoc(collection(db, "chatRooms", roomId, "messages"), {
+          senderId: "system",
+          senderName: "Dormazon System",
+          text: text,
+          createdAt: new Date().toISOString()
+        });
+      }
+    } catch (error) {
+      console.error("Failed to send system message:", error);
     }
   };
 
@@ -466,7 +693,8 @@ function AppContent() {
         productTitle: product.title,
         productImage: product.images?.[0] || "",
         lastMessage: "Chat started",
-        lastMessageAt: new Date().toISOString()
+        lastMessageAt: new Date().toISOString(),
+        unreadBy: [product.sellerId] // New chat started, notify the seller
       };
       const docRef = await addDoc(collection(db, "chatRooms"), roomData);
       setSelectedChatRoom({ id: docRef.id, ...roomData });
@@ -474,6 +702,16 @@ function AppContent() {
     } catch (error) {
       console.error("Failed to start chat:", error);
       showAlert("Error", "Failed to start conversation.");
+    }
+  };
+
+  const updateProfile = async (data: Partial<UserProfile>) => {
+    if (!user) return;
+    try {
+      await updateDoc(doc(db, "users", user.uid), data);
+    } catch (error) {
+      console.error("Error updating profile:", error);
+      showAlert("Error", "Failed to update profile.");
     }
   };
 
@@ -515,14 +753,73 @@ function AppContent() {
           <div className="flex items-center gap-6">
             <button onClick={() => handleViewChange("home")} className={cn("text-sm font-bold transition-colors", view === "home" ? "text-primary" : "text-gray-500 hover:text-gray-900")}>Home</button>
             <button onClick={() => handleViewChange("favorites")} className={cn("text-sm font-bold transition-colors", view === "favorites" ? "text-primary" : "text-gray-500 hover:text-gray-900")}>Favorites</button>
-            <button onClick={() => handleViewChange("chat")} className={cn("text-sm font-bold transition-colors", view === "chat" ? "text-primary" : "text-gray-500 hover:text-gray-900")}>Messages</button>
-            <button onClick={() => handleViewChange("profile")} className={cn("text-sm font-bold transition-colors", view === "profile" ? "text-primary" : "text-gray-500 hover:text-gray-900")}>Profile</button>
             <button 
-              onClick={() => handleViewChange("sell")}
-              className="bg-primary text-white px-6 py-2 rounded-full font-bold text-sm shadow-lg shadow-primary/20 hover:bg-primary-hover transition-all"
+              onClick={() => handleViewChange("chat")} 
+              className={cn("text-sm font-bold transition-colors relative", view === "chat" ? "text-primary" : "text-gray-500 hover:text-gray-900")}
             >
-              Sell Item
+              Messages
+              {unreadChatCount > 0 && (
+                <span className="absolute -top-2 -right-3 min-w-[18px] h-[18px] bg-red-500 text-white text-[10px] font-bold rounded-full flex items-center justify-center border-2 border-white px-1">
+                  {unreadChatCount > 99 ? "99+" : unreadChatCount}
+                </span>
+              )}
             </button>
+            <button 
+              onClick={() => handleViewChange("profile")} 
+              className={cn("text-sm font-bold transition-colors relative", view === "profile" ? "text-primary" : "text-gray-500 hover:text-gray-900")}
+            >
+              Profile
+              {unhandledOrderCount > 0 && (
+                <span className="absolute -top-2 -right-3 min-w-[18px] h-[18px] bg-red-500 text-white text-[10px] font-bold rounded-full flex items-center justify-center border-2 border-white px-1">
+                  {unhandledOrderCount > 99 ? "99+" : unhandledOrderCount}
+                </span>
+              )}
+            </button>
+            <button 
+              onClick={() => handleViewChange("cart")}
+              className="relative p-2 text-gray-500 hover:text-primary transition-colors"
+            >
+              <ShoppingCart className="w-6 h-6" />
+              {profile?.cart && profile.cart.length > 0 && (
+                <span className="absolute -top-1 -right-1 w-5 h-5 bg-primary text-white text-[10px] font-bold rounded-full flex items-center justify-center border-2 border-white">
+                  {profile.cart.length}
+                </span>
+              )}
+            </button>
+            <div className="relative">
+              <button 
+                onClick={() => setShowSellOptions(!showSellOptions)}
+                className="bg-primary text-white px-6 py-2 rounded-full font-bold text-sm shadow-lg shadow-primary/20 hover:bg-primary-hover transition-all"
+              >
+                Sell Item
+              </button>
+              
+              <AnimatePresence>
+                {showSellOptions && (
+                  <motion.div 
+                    initial={{ opacity: 0, y: 10, scale: 0.95 }}
+                    animate={{ opacity: 1, y: 0, scale: 1 }}
+                    exit={{ opacity: 0, y: 10, scale: 0.95 }}
+                    className="absolute top-full right-0 mt-2 w-48 bg-white rounded-2xl shadow-2xl border border-black/5 overflow-hidden z-[60]"
+                  >
+                    <button 
+                      onClick={() => handleViewChange("sell")}
+                      className="w-full px-4 py-3 text-left hover:bg-gray-50 flex items-center gap-3 transition-colors"
+                    >
+                      <PlusCircle className="w-5 h-5 text-primary" />
+                      <span className="text-sm font-bold text-gray-700">Add Item</span>
+                    </button>
+                    <button 
+                      onClick={() => handleViewChange("seller_shop")}
+                      className="w-full px-4 py-3 text-left hover:bg-gray-50 flex items-center gap-3 transition-colors border-t border-gray-50"
+                    >
+                      <Package className="w-5 h-5 text-primary" />
+                      <span className="text-sm font-bold text-gray-700">My Shop</span>
+                    </button>
+                  </motion.div>
+                )}
+              </AnimatePresence>
+            </div>
           </div>
         </div>
       </header>
@@ -542,9 +839,16 @@ function AppContent() {
             onChange={(e) => setSearchQuery(e.target.value)}
           />
         </div>
-        <button className="relative p-2 text-gray-600">
+        <button 
+          onClick={() => handleViewChange("cart")}
+          className="relative p-2 text-gray-600"
+        >
           <ShoppingCart className="w-6 h-6" />
-          <span className="absolute top-1 right-1 w-2 h-2 bg-primary rounded-full border-2 border-white" />
+          {profile?.cart && profile.cart.length > 0 && (
+            <span className="absolute -top-1 -right-1 w-5 h-5 bg-primary text-white text-[10px] font-bold rounded-full flex items-center justify-center border-2 border-white">
+              {profile.cart.length}
+            </span>
+          )}
         </button>
       </nav>
 
@@ -556,6 +860,7 @@ function AppContent() {
             <HomeView 
               key="home"
               products={filteredProducts} 
+              users={users}
               selectedCategory={selectedCategory}
               onSelectCategory={setSelectedCategory}
               onSelectProduct={(p) => {
@@ -564,6 +869,23 @@ function AppContent() {
               }}
               favorites={profile?.favorites || []}
               onToggleFavorite={toggleFavorite}
+              onViewSellerShop={(sellerId) => {
+                setSelectedSellerId(sellerId);
+                handleViewChange("seller_shop");
+              }}
+            />
+          )}
+          {view === "cart" && (
+            <CartView 
+              key="cart"
+              products={products.filter(p => profile?.cart?.includes(p.id))}
+              onSelectProduct={(p) => {
+                setSelectedProduct(p);
+                handleViewChange("detail");
+              }}
+              onRemoveFromCart={removeFromCart}
+              onCheckout={checkout}
+              onBack={() => handleViewChange("home")}
             />
           )}
           {view === "sell" && (
@@ -579,6 +901,7 @@ function AppContent() {
               key="profile"
               profile={profile} 
               products={products.filter(p => p.sellerId === user.uid)}
+              users={users}
               onLogout={handleLogout}
               onSelectProduct={(p) => {
                 setSelectedProduct(p);
@@ -587,12 +910,14 @@ function AppContent() {
               favorites={profile?.favorites || []}
               onToggleFavorite={toggleFavorite}
               onManageOrders={() => handleViewChange("orders")}
+              onUpdateProfile={updateProfile}
             />
           )}
           {view === "orders" && (
             <ManageOrdersView 
               key="orders"
               products={products}
+              users={users}
               chatRooms={chatRooms}
               currentUser={user}
               onBack={() => handleViewChange("profile")}
@@ -601,26 +926,48 @@ function AppContent() {
                 handleViewChange("detail");
               }}
               showAlert={showAlert}
+              onSendSystemMessage={sendSystemMessage}
+              onViewSellerShop={(sellerId) => {
+                setSelectedSellerId(sellerId);
+                handleViewChange("seller_shop");
+              }}
             />
           )}
           {view === "detail" && selectedProduct && (
             <ProductDetailView 
               key={`detail-${selectedProduct.id}`}
               product={selectedProduct} 
+              users={users}
               currentUser={user}
               sellerTransactionCount={products.filter(p => p && selectedProduct && p.sellerId === selectedProduct.sellerId && (p.status === "Completed" || p.status === "Sold")).length}
+              onViewSellerShop={(sellerId) => {
+                setSelectedSellerId(sellerId);
+                handleViewChange("seller_shop");
+              }}
               onBack={() => handleViewChange("home")}
               onStatusChange={async (id, status) => {
-                const updates: any = { status };
-                if (status === "Completed") {
-                  updates.completedAt = new Date().toISOString();
-                  // Also increment seller's count
-                  await updateDoc(doc(db, "users", selectedProduct.sellerId), {
-                    transactionCount: increment(1)
-                  });
+                try {
+                  const updates: any = { status };
+                  if (status === "Completed") {
+                    updates.completedAt = new Date().toISOString();
+                    // Increment seller's sales count
+                    await updateDoc(doc(db, "users", selectedProduct.sellerId), {
+                      salesCount: increment(1)
+                    });
+                    // Increment buyer's purchases count if exists
+                    if (selectedProduct.buyerId) {
+                      await updateDoc(doc(db, "users", selectedProduct.buyerId), {
+                        purchasesCount: increment(1)
+                      });
+                    }
+                  }
+                  await updateDoc(doc(db, "products", id), updates);
+                  setSelectedProduct(prev => prev ? { ...prev, ...updates } : null);
+                  showAlert("Success", `Status updated to ${status}`);
+                } catch (error) {
+                  console.error("Status update failed:", error);
+                  showAlert("Error", "Failed to update status. Please try again.");
                 }
-                await updateDoc(doc(db, "products", id), updates);
-                setSelectedProduct(prev => prev ? { ...prev, ...updates } : null);
               }}
               onDelete={async (id) => {
                 showConfirm({
@@ -649,27 +996,8 @@ function AppContent() {
               onContactSeller={(product) => {
                 startChat(product);
               }}
-              onBuyNow={(product) => {
-                if (!user || !profile) return;
-                showConfirm({
-                  title: "Confirm Purchase",
-                  message: `Are you sure you want to buy "${product.title}" for $${product.price}? This will notify the seller.`,
-                  confirmText: "Buy Now",
-                  onConfirm: async () => {
-                    try {
-                      await updateDoc(doc(db, "products", product.id), { 
-                        status: "Pending",
-                        buyerId: user.uid,
-                        buyerName: profile.displayName
-                      });
-                      setSelectedProduct(prev => prev ? { ...prev, status: "Pending", buyerId: user.uid, buyerName: profile.displayName } : null);
-                      showAlert("Order Placed!", "The seller has been notified. You can track your order in 'Manage Orders'.");
-                    } catch (error) {
-                      console.error("Purchase failed:", error);
-                      showAlert("Error", "Failed to place order. Please try again.");
-                    }
-                  }
-                });
+              onAddToCart={(product) => {
+                addToCart(product.id);
               }}
               isOwner={selectedProduct.sellerId === user?.uid}
               showAlert={showAlert}
@@ -685,6 +1013,8 @@ function AppContent() {
                 setSelectedChatRoom(room);
                 handleViewChange("chat_room");
               }} 
+              currentUserId={user.uid}
+              users={users}
             />
           )}
           {view === "chat_room" && selectedChatRoom && (
@@ -693,26 +1023,100 @@ function AppContent() {
               room={selectedChatRoom} 
               onBack={() => handleViewChange("chat")} 
               currentUser={user}
+              profile={profile}
+              users={users}
+              onViewSellerShop={(sellerId) => {
+                setSelectedSellerId(sellerId);
+                handleViewChange("seller_shop");
+              }}
             />
           )}
           {view === "favorites" && (
             <FavoritesView 
               key="favorites"
               products={products.filter(p => profile?.favorites?.includes(p.id))} 
+              users={users}
               onSelectProduct={(p) => {
                 setSelectedProduct(p);
                 handleViewChange("detail");
               }}
               favorites={profile?.favorites || []}
               onToggleFavorite={toggleFavorite}
+              onViewSellerShop={(sellerId) => {
+                setSelectedSellerId(sellerId);
+                handleViewChange("seller_shop");
+              }}
             />
           )}
           {view === "settings" && (
             <SettingsView profile={profile} onLogout={handleLogout} />
           )}
+          {view === "seller_shop" && (
+            <SellerShopView 
+              sellerProfile={selectedSellerId ? users[selectedSellerId] : profile}
+              products={products.filter(p => p.sellerId === (selectedSellerId || user?.uid))}
+              onSelectProduct={(p) => {
+                setSelectedProduct(p);
+                handleViewChange("detail");
+              }}
+              onBack={() => {
+                if (selectedSellerId) {
+                  setSelectedSellerId(null);
+                  handleViewChange("home");
+                } else {
+                  handleViewChange("profile");
+                }
+              }}
+              isOwnShop={!selectedSellerId || selectedSellerId === user?.uid}
+              onUpdateProfile={updateProfile}
+            />
+          )}
         </AnimatePresence>
         </div>
       </main>
+
+      {/* Sell Options Overlay (Mobile) */}
+      <AnimatePresence>
+        {showSellOptions && (
+          <>
+            <motion.div 
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              exit={{ opacity: 0 }}
+              onClick={() => setShowSellOptions(false)}
+              className="fixed inset-0 bg-black/40 backdrop-blur-sm z-[55] md:hidden"
+            />
+            <motion.div 
+              initial={{ opacity: 0, y: 100 }}
+              animate={{ opacity: 1, y: 0 }}
+              exit={{ opacity: 0, y: 100 }}
+              className="fixed bottom-24 left-6 right-6 bg-white rounded-3xl p-6 z-[60] md:hidden shadow-2xl"
+            >
+              <h3 className="text-lg font-black text-gray-900 mb-4">Sell Something</h3>
+              <div className="grid grid-cols-2 gap-4">
+                <button 
+                  onClick={() => handleViewChange("sell")}
+                  className="flex flex-col items-center gap-3 p-4 bg-gray-50 rounded-2xl hover:bg-primary/5 transition-colors group"
+                >
+                  <div className="w-12 h-12 bg-primary/10 rounded-full flex items-center justify-center text-primary group-hover:scale-110 transition-transform">
+                    <PlusCircle className="w-6 h-6" />
+                  </div>
+                  <span className="text-sm font-bold text-gray-700">Add Item</span>
+                </button>
+                <button 
+                  onClick={() => handleViewChange("seller_shop")}
+                  className="flex flex-col items-center gap-3 p-4 bg-gray-50 rounded-2xl hover:bg-primary/5 transition-colors group"
+                >
+                  <div className="w-12 h-12 bg-primary/10 rounded-full flex items-center justify-center text-primary group-hover:scale-110 transition-transform">
+                    <Package className="w-6 h-6" />
+                  </div>
+                  <span className="text-sm font-bold text-gray-700">My Shop</span>
+                </button>
+              </div>
+            </motion.div>
+          </>
+        )}
+      </AnimatePresence>
 
       {/* Bottom Nav (Mobile Only) */}
       <div className="fixed bottom-0 left-0 right-0 bg-white border-t border-gray-100 px-6 py-3 flex justify-between items-center z-50 md:hidden">
@@ -723,16 +1127,26 @@ function AppContent() {
         />
         <NavButton icon={Heart} active={view === "favorites"} onClick={() => handleViewChange("favorites")} />
         <button 
-          onClick={() => handleViewChange("sell")}
+          onClick={() => setShowSellOptions(!showSellOptions)}
           className={cn(
             "w-14 h-14 rounded-full flex items-center justify-center -mt-10 shadow-lg transition-all",
-            view === "sell" ? "bg-primary-hover scale-110" : "bg-primary hover:scale-105"
+            showSellOptions ? "bg-primary-hover scale-110 rotate-45" : "bg-primary hover:scale-105"
           )}
         >
           <PlusCircle className="w-8 h-8 text-white" />
         </button>
-        <NavButton icon={MessageCircle} active={view === "chat"} onClick={() => handleViewChange("chat")} />
-        <NavButton icon={User} active={view === "profile"} onClick={() => handleViewChange("profile")} />
+        <NavButton 
+          icon={MessageCircle} 
+          active={view === "chat"} 
+          onClick={() => handleViewChange("chat")} 
+          badgeCount={unreadChatCount}
+        />
+        <NavButton 
+          icon={User} 
+          active={view === "profile"} 
+          onClick={() => handleViewChange("profile")} 
+          badgeCount={unhandledOrderCount}
+        />
       </div>
 
       {/* Custom Modal */}
@@ -862,11 +1276,13 @@ function AuthView({ onLogin }: { onLogin: () => void }) {
 
 function HomeView({ 
   products, 
+  users,
   selectedCategory, 
   onSelectCategory,
   onSelectProduct,
   favorites,
-  onToggleFavorite
+  onToggleFavorite,
+  onViewSellerShop
 }: HomeViewProps) {
   return (
     <motion.div 
@@ -900,9 +1316,11 @@ function HomeView({
             <ProductCard 
               key={product.id} 
               product={product} 
+              users={users}
               onClick={() => onSelectProduct(product)}
               isFavorite={favorites.includes(product.id)}
               onToggleFavorite={onToggleFavorite}
+              onViewSellerShop={onViewSellerShop}
             />
           ))
         ) : (
@@ -915,7 +1333,11 @@ function HomeView({
   );
 }
 
-function ProductCard({ product, onClick, isFavorite, onToggleFavorite }: ProductCardProps) {
+function ProductCard({ product, users, onClick, isFavorite, onToggleFavorite, onViewSellerShop }: ProductCardProps) {
+  const seller = users[product.sellerId];
+  const sellerAvatar = seller?.photoURL || `https://api.dicebear.com/7.x/avataaars/svg?seed=${product.sellerId}`;
+  const sellerIsStudent = seller?.isStudent ?? product.sellerIsStudent;
+
   return (
     <motion.div 
       whileTap={{ scale: 0.98 }}
@@ -965,9 +1387,15 @@ function ProductCard({ product, onClick, isFavorite, onToggleFavorite }: Product
               <Calendar className="w-2.5 h-2.5" />
               {product.departureDate}
             </div>
-            <div className="w-6 h-6 rounded-full overflow-hidden border border-white shadow-sm relative">
-              <img src={product.sellerAvatar || "https://picsum.photos/seed/user/100"} className="w-full h-full object-cover" alt="seller" />
-              {product.sellerIsStudent && (
+            <div 
+              onClick={(e) => {
+                e.stopPropagation();
+                onViewSellerShop(product.sellerId);
+              }}
+              className="w-6 h-6 rounded-full overflow-hidden border border-white shadow-sm relative hover:scale-110 transition-transform cursor-pointer"
+            >
+              <img src={sellerAvatar} className="w-full h-full object-cover" alt="seller" />
+              {sellerIsStudent && (
                 <div className="absolute bottom-0 right-0 w-2 h-2 bg-primary rounded-full border border-white" title="Verified Student" />
               )}
             </div>
@@ -1017,52 +1445,6 @@ function SellView({ onSuccess, profile, showAlert }: SellViewProps) {
     try {
       console.log("Starting image processing...");
       
-      // Helper to compress and convert to base64
-      const processImage = async (file: File): Promise<string> => {
-        return new Promise((resolve, reject) => {
-          const reader = new FileReader();
-          reader.readAsDataURL(file);
-          reader.onload = (event) => {
-            const img = new Image();
-            img.src = event.target?.result as string;
-            img.onload = () => {
-              const canvas = document.createElement('canvas');
-              // Aggressive compression for Firestore limits
-              const MAX_WIDTH = 600; 
-              const MAX_HEIGHT = 600;
-              let width = img.width;
-              let height = img.height;
-
-              if (width > height) {
-                if (width > MAX_WIDTH) {
-                  height *= MAX_WIDTH / width;
-                  width = MAX_WIDTH;
-                }
-              } else {
-                if (height > MAX_HEIGHT) {
-                  width *= MAX_HEIGHT / height;
-                  height = MAX_HEIGHT;
-                }
-              }
-
-              canvas.width = width;
-              canvas.height = height;
-              const ctx = canvas.getContext('2d');
-              if (ctx) {
-                ctx.fillStyle = "white";
-                ctx.fillRect(0, 0, width, height);
-                ctx.drawImage(img, 0, 0, width, height);
-              }
-              
-              // Quality 0.5 to keep it very small (~50-100KB)
-              resolve(canvas.toDataURL('image/jpeg', 0.5));
-            };
-            img.onerror = () => reject(new Error("Failed to load image for processing"));
-          };
-          reader.onerror = () => reject(new Error("Failed to read file"));
-        });
-      };
-
       const imageUrls = await Promise.all(
         images.map(async (file) => {
           const storageRef = ref(storage, `products/${Date.now()}_${file.name}`);
@@ -1080,7 +1462,7 @@ function SellView({ onSuccess, profile, showAlert }: SellViewProps) {
             return url;
           } catch (err) {
             console.warn(`Storage upload failed for ${file.name}, falling back to Base64:`, err);
-            const base64 = await processImage(file);
+            const base64 = await compressImage(file);
             console.log(`Base64 fallback successful for ${file.name}`);
             return base64;
           }
@@ -1102,7 +1484,8 @@ function SellView({ onSuccess, profile, showAlert }: SellViewProps) {
       sellerName: profile.displayName,
       sellerAvatar: profile.photoURL,
       sellerIsStudent: profile.isStudent,
-      sellerTransactionCount: profile.transactionCount || 0,
+      sellerSalesCount: profile.salesCount || 0,
+      sellerPurchasesCount: profile.purchasesCount || 0,
       dormLocation: profile.dormLocation || "Cornell Tech House",
       status: "Still on",
       createdAt: new Date().toISOString()
@@ -1280,19 +1663,26 @@ function SellView({ onSuccess, profile, showAlert }: SellViewProps) {
 
 function ProductDetailView({ 
   product, 
+  users,
   currentUser,
   onBack, 
   onStatusChange,
   onDelete,
   onUpdate,
   onContactSeller,
-  onBuyNow,
+  onAddToCart,
   isOwner,
   showAlert,
   isFavorite,
   onToggleFavorite,
-  sellerTransactionCount
+  sellerTransactionCount,
+  onViewSellerShop
 }: ProductDetailViewProps) {
+  const seller = users[product.sellerId];
+  const sellerAvatar = seller?.photoURL || `https://api.dicebear.com/7.x/avataaars/svg?seed=${product.sellerId}`;
+  const sellerName = seller?.displayName || product.sellerName;
+  const sellerIsStudent = seller?.isStudent ?? product.sellerIsStudent;
+
   const [activeImage, setActiveImage] = useState(0);
   const [isEditing, setIsEditing] = useState(false);
   const [editData, setEditData] = useState({
@@ -1330,11 +1720,11 @@ function ProductDetailView({
       initial={{ opacity: 0, y: 20 }}
       animate={{ opacity: 1, y: 0 }}
       exit={{ opacity: 0, y: 20 }}
-      className="bg-white min-h-full"
+      className="bg-white min-h-full relative"
     >
       {/* Header */}
-      <div className="sticky top-0 md:top-16 z-10 bg-white/80 backdrop-blur px-4 py-3 flex items-center justify-between border-b border-gray-100">
-        <button onClick={onBack} className="p-2 -ml-2 text-gray-600">
+      <div className="sticky top-0 z-30 bg-white border-b border-gray-100 px-4 py-3 flex items-center justify-between">
+        <button onClick={onBack} className="p-2 -ml-2 text-gray-600 hover:bg-gray-100 rounded-full transition-colors">
           <ChevronLeft className="w-6 h-6" />
         </button>
         <h2 className="font-bold text-gray-800">Item Details</h2>
@@ -1363,12 +1753,12 @@ function ProductDetailView({
               </button>
             </>
           ) : (
-            <div className="w-2" />
+            <div className="w-10" />
           )}
         </div>
       </div>
 
-      <div className="grid grid-cols-1 md:grid-cols-2 gap-0 md:gap-8">
+      <div className="grid grid-cols-1 md:grid-cols-2 gap-0 md:gap-8 pt-2">
         {/* Image Gallery */}
         <div className="aspect-square bg-gray-100 relative md:rounded-2xl md:overflow-hidden md:m-6">
           {product.images?.[activeImage] ? (
@@ -1448,9 +1838,9 @@ function ProductDetailView({
         ) : (
           <>
             <div className="space-y-2">
-              <div className="flex justify-between items-start">
-                <h1 className="text-2xl font-black text-gray-900 leading-tight">{product.title}</h1>
-                <span className="text-2xl font-black text-primary">${product.price}</span>
+              <div className="flex justify-between items-start gap-4">
+                <h1 className="text-2xl font-black text-gray-900 leading-tight flex-1">{product.title}</h1>
+                <span className="text-2xl font-black text-primary whitespace-nowrap flex-shrink-0">${product.price}</span>
               </div>
               <div className="flex flex-wrap gap-2">
                 <span className="bg-gray-100 text-gray-600 px-3 py-1 rounded-lg text-xs font-bold uppercase tracking-wider">{product.category}</span>
@@ -1504,21 +1894,24 @@ function ProductDetailView({
         <hr className="border-gray-100" />
 
         {/* Seller Info */}
-        <div className="flex items-center justify-between">
+        <div 
+          onClick={() => onViewSellerShop(product.sellerId)}
+          className="flex items-center justify-between cursor-pointer hover:bg-gray-50 p-2 -m-2 rounded-2xl transition-colors"
+        >
           <div className="flex items-center gap-3">
             <div className="w-12 h-12 rounded-2xl overflow-hidden shadow-sm">
-              <img src={product.sellerAvatar || "https://picsum.photos/seed/user/100"} className="w-full h-full object-cover" alt="seller" />
+              <img src={sellerAvatar} className="w-full h-full object-cover" alt="seller" />
             </div>
             <div>
-              <h4 className="font-bold text-gray-900">{product.sellerName}</h4>
+              <h4 className="font-bold text-gray-900">{sellerName}</h4>
               <p className="text-xs text-gray-400">
-                {product.sellerIsStudent ? "Verified Student • Cornell Tech" : "Community Member"}
+                {sellerIsStudent ? "Verified Student • Cornell" : "Community Member"}
               </p>
             </div>
           </div>
           <div className="text-right">
             <p className="text-primary font-black text-lg">{sellerTransactionCount}</p>
-            <p className="text-[10px] text-gray-400 font-bold uppercase">Transactions</p>
+            <p className="text-[10px] text-gray-400 font-bold uppercase">Sales</p>
           </div>
         </div>
 
@@ -1558,10 +1951,10 @@ function ProductDetailView({
                   Contact
                 </button>
                 <button 
-                  onClick={() => onBuyNow(product)}
+                  onClick={() => onAddToCart(product)}
                   className="bg-black text-white font-bold py-3 px-6 rounded-xl transition-all hover:bg-gray-800 active:scale-95 shadow-lg"
                 >
-                  Buy Now
+                  Add to Cart
                 </button>
               </div>
             ) : product.buyerId === currentUser?.uid ? (
@@ -1613,7 +2006,124 @@ function ProductDetailView({
   );
 }
 
-function ManageOrdersView({ products, chatRooms, currentUser, onBack, onSelectProduct, showAlert }: ManageOrdersViewProps) {
+function CartView({ 
+  products, 
+  onSelectProduct, 
+  onRemoveFromCart, 
+  onCheckout, 
+  onBack 
+}: { 
+  key?: string,
+  products: Product[], 
+  onSelectProduct: (p: Product) => void, 
+  onRemoveFromCart: (id: string) => void, 
+  onCheckout: () => void, 
+  onBack: () => void 
+}) {
+  const total = products.reduce((sum, p) => sum + p.price, 0);
+
+  return (
+    <motion.div 
+      initial={{ opacity: 0, x: 20 }}
+      animate={{ opacity: 1, x: 0 }}
+      exit={{ opacity: 0, x: -20 }}
+      className="flex flex-col h-full bg-white"
+    >
+      <div className="p-4 border-b border-gray-100 flex items-center gap-4">
+        <button onClick={onBack} className="p-2 hover:bg-gray-100 rounded-full transition-colors">
+          <ChevronLeft className="w-6 h-6" />
+        </button>
+        <h2 className="text-xl font-black text-gray-900">Shopping Cart</h2>
+      </div>
+
+      <div className="flex-1 overflow-y-auto p-4 space-y-4">
+        {products.length === 0 ? (
+          <div className="flex flex-col items-center justify-center py-20 text-center">
+            <div className="w-20 h-20 bg-gray-50 rounded-3xl flex items-center justify-center text-gray-300 mb-4">
+              <ShoppingCart className="w-10 h-10" />
+            </div>
+            <h3 className="text-lg font-bold text-gray-900">Your cart is empty</h3>
+            <p className="text-gray-500 text-sm max-w-[200px] mx-auto mt-2">
+              Looks like you haven't added any items to your cart yet.
+            </p>
+            <button 
+              onClick={onBack}
+              className="mt-6 text-primary font-bold hover:underline"
+            >
+              Go Shopping
+            </button>
+          </div>
+        ) : (
+          products.map(product => (
+            <div 
+              key={product.id}
+              className="flex gap-4 p-4 bg-gray-50 rounded-2xl border border-gray-100 group"
+            >
+              <div 
+                className="w-24 h-24 rounded-xl overflow-hidden flex-shrink-0 cursor-pointer"
+                onClick={() => onSelectProduct(product)}
+              >
+                <img src={product.images?.[0] || "https://picsum.photos/seed/item/200"} className="w-full h-full object-cover" alt={product.title} />
+              </div>
+              <div className="flex-1 min-w-0 flex flex-col justify-between">
+                <div>
+                  <div className="flex justify-between items-start">
+                    <h4 
+                      className="font-bold text-gray-900 truncate cursor-pointer hover:text-primary transition-colors"
+                      onClick={() => onSelectProduct(product)}
+                    >
+                      {product.title}
+                    </h4>
+                    <button 
+                      onClick={() => onRemoveFromCart(product.id)}
+                      className="p-1 text-gray-400 hover:text-red-500 transition-colors"
+                    >
+                      <Trash2 className="w-4 h-4" />
+                    </button>
+                  </div>
+                  <p className="text-xs text-gray-500 mt-1">{product.category}</p>
+                </div>
+                <div className="flex justify-between items-end">
+                  <span className="text-lg font-black text-primary">${product.price}</span>
+                  {product.status !== "Still on" && (
+                    <span className="text-[10px] font-bold text-red-500 uppercase bg-red-50 px-2 py-1 rounded">No longer available</span>
+                  )}
+                </div>
+              </div>
+            </div>
+          ))
+        )}
+      </div>
+
+      {products.length > 0 && (
+        <div className="p-6 border-t border-gray-100 bg-white space-y-4">
+          <div className="flex justify-between items-center">
+            <span className="text-gray-500 font-bold">Total</span>
+            <span className="text-2xl font-black text-gray-900">${total}</span>
+          </div>
+          <button 
+            onClick={onCheckout}
+            className="w-full py-4 bg-primary text-white font-bold rounded-2xl shadow-lg shadow-primary/20 hover:scale-[1.02] active:scale-95 transition-all"
+          >
+            Checkout Now
+          </button>
+        </div>
+      )}
+    </motion.div>
+  );
+}
+
+function ManageOrdersView({ 
+  products, 
+  users,
+  chatRooms, 
+  currentUser, 
+  onBack, 
+  onSelectProduct, 
+  showAlert, 
+  onSendSystemMessage,
+  onViewSellerShop 
+}: ManageOrdersViewProps) {
   const [tab, setTab] = useState<"purchases" | "sales">("purchases");
   const [assigningId, setAssigningId] = useState<string | null>(null);
 
@@ -1621,16 +2131,41 @@ function ManageOrdersView({ products, chatRooms, currentUser, onBack, onSelectPr
   const myPurchases = products.filter(p => p.buyerId === currentUser?.uid);
   const mySales = products.filter(p => p.sellerId === currentUser?.uid && p.status !== "Still on");
 
+  useEffect(() => {
+    const unnotifiedSales = mySales.filter(p => p.sellerNotified === false);
+    if (unnotifiedSales.length > 0) {
+      unnotifiedSales.forEach(p => {
+        updateDoc(doc(db, "products", p.id), { sellerNotified: true });
+      });
+    }
+  }, [mySales.length]);
+
   const handleStatusUpdate = async (product: Product, newStatus: Product["status"]) => {
     try {
       const updates: Partial<Product> = { status: newStatus };
-      if (newStatus === "Delivered") updates.deliveredAt = new Date().toISOString();
+      if (newStatus === "Delivered") {
+        updates.deliveredAt = new Date().toISOString();
+        if (product.buyerId) {
+          await onSendSystemMessage(
+            product.id, 
+            product.sellerId, 
+            product.buyerId, 
+            `The seller has delivered your item "${product.title}". Please check it.`
+          );
+        }
+      }
       if (newStatus === "Completed") {
         updates.completedAt = new Date().toISOString();
-        // Increment seller's transaction count in users collection
+        // Increment seller's sales count
         await updateDoc(doc(db, "users", product.sellerId), {
-          transactionCount: increment(1)
+          salesCount: increment(1)
         });
+        // Increment buyer's purchases count if exists
+        if (product.buyerId) {
+          await updateDoc(doc(db, "users", product.buyerId), {
+            purchasesCount: increment(1)
+          });
+        }
       }
       if (newStatus === "Still on") {
         updates.buyerId = "";
@@ -1653,9 +2188,13 @@ function ManageOrdersView({ products, chatRooms, currentUser, onBack, onSelectPr
         status: "Completed" // Legacy items are usually already completed
       });
       
-      // Increment seller's transaction count in users collection
+      // Increment seller's sales count
       await updateDoc(doc(db, "users", sellerId), {
-        transactionCount: increment(1)
+        salesCount: increment(1)
+      });
+      // Increment buyer's purchases count
+      await updateDoc(doc(db, "users", buyerId), {
+        purchasesCount: increment(1)
       });
 
       setAssigningId(null);
@@ -1731,9 +2270,41 @@ function ManageOrdersView({ products, chatRooms, currentUser, onBack, onSelectPr
                   <div className="flex items-center gap-2 mt-1">
                     <StatusBadge status={product.status} />
                   </div>
-                  {product.buyerName && (
-                    <p className="text-[10px] text-gray-400 mt-1">Buyer: {product.buyerName}</p>
-                  )}
+                  {tab === "purchases" ? (
+                    <div 
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        onViewSellerShop(product.sellerId);
+                      }}
+                      className="flex items-center gap-2 mt-2 cursor-pointer group"
+                    >
+                      <div className="w-5 h-5 rounded-full overflow-hidden border border-gray-100">
+                        <img 
+                          src={users[product.sellerId]?.photoURL || `https://api.dicebear.com/7.x/avataaars/svg?seed=${product.sellerId}`} 
+                          className="w-full h-full object-cover" 
+                          alt="seller" 
+                        />
+                      </div>
+                      <p className="text-[10px] text-gray-400 group-hover:text-primary transition-colors">Seller: {product.sellerName}</p>
+                    </div>
+                  ) : product.buyerId ? (
+                    <div 
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        onViewSellerShop(product.buyerId!);
+                      }}
+                      className="flex items-center gap-2 mt-2 cursor-pointer group"
+                    >
+                      <div className="w-5 h-5 rounded-full overflow-hidden border border-gray-100">
+                        <img 
+                          src={users[product.buyerId]?.photoURL || `https://api.dicebear.com/7.x/avataaars/svg?seed=${product.buyerId}`} 
+                          className="w-full h-full object-cover" 
+                          alt="buyer" 
+                        />
+                      </div>
+                      <p className="text-[10px] text-gray-400 group-hover:text-primary transition-colors">Buyer: {product.buyerName}</p>
+                    </div>
+                  ) : null}
                 </div>
               </div>
 
@@ -1858,16 +2429,256 @@ function StatusBadge({ status }: { status: string | undefined }) {
   );
 }
 
+interface SellerShopViewProps {
+  sellerProfile: UserProfile | null;
+  products: Product[];
+  onSelectProduct: (p: Product) => void;
+  onBack: () => void;
+  isOwnShop: boolean;
+  onUpdateProfile: (data: Partial<UserProfile>) => Promise<void>;
+}
+
+function SellerShopView({ sellerProfile, products, onSelectProduct, onBack, isOwnShop, onUpdateProfile }: SellerShopViewProps) {
+  const [tab, setTab] = useState<"active" | "sold">("active");
+  const [isEditing, setIsEditing] = useState(false);
+  const [editData, setEditData] = useState({
+    majorInfo: sellerProfile?.majorInfo || "Computer Science, Class of 2026",
+    bio: sellerProfile?.bio || "Selling campus essentials to new students. Fast response!"
+  });
+  const [isSaving, setIsSaving] = useState(false);
+  
+  useEffect(() => {
+    if (sellerProfile) {
+      setEditData({
+        majorInfo: sellerProfile.majorInfo || "Computer Science, Class of 2026",
+        bio: sellerProfile.bio || "Selling campus essentials to new students. Fast response!"
+      });
+    }
+  }, [sellerProfile?.uid, sellerProfile?.majorInfo, sellerProfile?.bio]);
+
+  const activeProducts = products.filter(p => p.status === "Still on");
+  const soldProducts = products.filter(p => p.status === "Sold" || p.status === "Completed");
+
+  const handleSave = async () => {
+    setIsSaving(true);
+    try {
+      await onUpdateProfile(editData);
+      setIsEditing(false);
+    } catch (error) {
+      console.error("Error updating profile:", error);
+    } finally {
+      setIsSaving(false);
+    }
+  };
+
+  return (
+    <motion.div 
+      initial={{ opacity: 0, y: 20 }}
+      animate={{ opacity: 1, y: 0 }}
+      className="min-h-screen bg-white"
+    >
+      {/* Header */}
+      <div className="relative">
+        <div className="h-32 bg-gray-100 overflow-hidden">
+          <img 
+            src="https://picsum.photos/seed/campus/1200/400" 
+            className="w-full h-full object-cover opacity-50" 
+            alt="cover" 
+          />
+        </div>
+        <button 
+          onClick={onBack}
+          className="absolute top-4 left-4 w-10 h-10 bg-white/80 backdrop-blur-md rounded-full flex items-center justify-center text-gray-800 shadow-sm"
+        >
+          <ChevronLeft className="w-6 h-6" />
+        </button>
+      </div>
+
+      <div className="px-6 -mt-10 relative z-10">
+        <div className="flex items-end justify-between mb-6">
+          <div className="relative">
+            <div className="w-24 h-24 rounded-full border-4 border-white overflow-hidden shadow-lg bg-white">
+              <img 
+                src={sellerProfile?.photoURL || `https://api.dicebear.com/7.x/avataaars/svg?seed=${sellerProfile?.uid}`} 
+                className="w-full h-full object-cover" 
+                alt="avatar" 
+              />
+            </div>
+          </div>
+          {!isOwnShop && (
+            <button className="bg-primary text-white px-6 py-2 rounded-full font-bold text-sm shadow-lg shadow-primary/20 flex items-center gap-2">
+              <PlusCircle className="w-4 h-4" />
+              Follow
+            </button>
+          )}
+        </div>
+
+        <div className="mb-6">
+          <div className="flex items-center justify-between mb-1">
+            <div className="flex items-center gap-2">
+              <h2 className="text-2xl font-black text-gray-900">{sellerProfile?.displayName}</h2>
+              {sellerProfile?.isStudent && (
+                <div className="bg-primary/10 text-primary px-2 py-0.5 rounded text-[10px] font-bold flex items-center gap-1">
+                  <CheckCircle2 className="w-3 h-3" />
+                  Verified @Cornell
+                </div>
+              )}
+            </div>
+            {isOwnShop && (
+              <button 
+                onClick={() => isEditing ? handleSave() : setIsEditing(true)}
+                disabled={isSaving}
+                className="text-xs font-bold text-primary hover:underline"
+              >
+                {isSaving ? "Saving..." : isEditing ? "Save" : "Edit Profile"}
+              </button>
+            )}
+          </div>
+
+          {isEditing ? (
+            <div className="space-y-3 mb-4">
+              <input 
+                type="text"
+                value={editData.majorInfo}
+                onChange={(e) => setEditData(prev => ({ ...prev, majorInfo: e.target.value }))}
+                className="w-full bg-gray-50 border-none rounded-xl px-4 py-2 text-sm font-medium focus:ring-2 focus:ring-primary/20"
+                placeholder="Major, Class of Year"
+              />
+              <textarea 
+                value={editData.bio}
+                onChange={(e) => setEditData(prev => ({ ...prev, bio: e.target.value }))}
+                className="w-full bg-gray-50 border-none rounded-xl px-4 py-2 text-sm leading-relaxed focus:ring-2 focus:ring-primary/20 resize-none"
+                rows={2}
+                placeholder="Tell us about yourself..."
+              />
+            </div>
+          ) : (
+            <>
+              <p className="text-sm text-gray-500 font-medium mb-3">
+                {sellerProfile?.majorInfo || "Computer Science, Class of 2026"}
+              </p>
+              <p className="text-sm text-gray-600 leading-relaxed mb-4">
+                {sellerProfile?.bio || "Selling campus essentials to new students. Fast response!"}
+              </p>
+            </>
+          )}
+          
+          <div className="flex items-center gap-6">
+            <div className="flex flex-col">
+              <span className="text-lg font-black text-gray-900">{sellerProfile?.followersCount || 0}</span>
+              <span className="text-[10px] text-gray-400 font-bold uppercase tracking-wider">Followers</span>
+            </div>
+            <div className="flex flex-col">
+              <span className="text-lg font-black text-gray-900">{sellerProfile?.salesCount || 0}</span>
+              <span className="text-[10px] text-gray-400 font-bold uppercase tracking-wider">Sales</span>
+            </div>
+            <div className="flex flex-col">
+              <span className="text-lg font-black text-gray-900">{sellerProfile?.avgResponseTime || "N/A"}</span>
+              <span className="text-[10px] text-gray-400 font-bold uppercase tracking-wider">Avg. response</span>
+            </div>
+          </div>
+        </div>
+
+        {/* Tabs */}
+        <div className="flex gap-8 border-b border-gray-100 mb-6">
+          <button 
+            onClick={() => setTab("active")}
+            className={cn(
+              "pb-3 text-sm font-bold transition-all relative",
+              tab === "active" ? "text-primary" : "text-gray-400"
+            )}
+          >
+            Still On ({activeProducts.length})
+            {tab === "active" && (
+              <motion.div layoutId="shop-tab" className="absolute bottom-0 left-0 right-0 h-0.5 bg-primary" />
+            )}
+          </button>
+          <button 
+            onClick={() => setTab("sold")}
+            className={cn(
+              "pb-3 text-sm font-bold transition-all relative",
+              tab === "sold" ? "text-primary" : "text-gray-400"
+            )}
+          >
+            Sold ({soldProducts.length})
+            {tab === "sold" && (
+              <motion.div layoutId="shop-tab" className="absolute bottom-0 left-0 right-0 h-0.5 bg-primary" />
+            )}
+          </button>
+        </div>
+
+        {/* Grid */}
+        <div className="grid grid-cols-2 gap-4 pb-24">
+          {(tab === "active" ? activeProducts : soldProducts).map(product => (
+            <div 
+              key={product.id}
+              onClick={() => onSelectProduct(product)}
+              className="bg-white rounded-2xl overflow-hidden border border-black/5 shadow-sm active:scale-95 transition-all"
+            >
+              <div className="aspect-square relative">
+                <img src={product.images[0]} className="w-full h-full object-cover" alt={product.title} />
+                {product.status !== "Still on" && (
+                  <div className="absolute inset-0 bg-black/40 flex items-center justify-center">
+                    <span className="bg-white/90 backdrop-blur-md px-3 py-1 rounded-full text-[10px] font-black uppercase tracking-widest text-gray-900">
+                      {product.status}
+                    </span>
+                  </div>
+                )}
+              </div>
+              <div className="p-3">
+                <h4 className="font-bold text-gray-900 text-sm truncate mb-1">{product.title}</h4>
+                <div className="flex items-center gap-1 mb-2">
+                  <span className="text-primary font-black text-lg">${product.price}</span>
+                  <span className="text-[10px] text-primary/60 font-bold uppercase">大字紅字</span>
+                </div>
+                <div className="flex items-center justify-between">
+                  <span className="text-[10px] text-gray-400 font-bold uppercase truncate">Used: 9成新</span>
+                  <Heart className="w-3 h-3 text-gray-300" />
+                </div>
+              </div>
+            </div>
+          ))}
+          {(tab === "active" ? activeProducts : soldProducts).length === 0 && (
+            <div className="col-span-2 py-20 text-center">
+              <Package className="w-12 h-12 text-gray-200 mx-auto mb-4" />
+              <p className="text-gray-400 font-bold text-sm">No items found in this category</p>
+            </div>
+          )}
+        </div>
+      </div>
+    </motion.div>
+  );
+}
+
 function ProfileView({ 
   profile, 
   products, 
+  users,
   onLogout,
   onSelectProduct,
   favorites,
   onToggleFavorite,
-  onManageOrders
+  onManageOrders,
+  onUpdateProfile
 }: ProfileViewProps) {
   const [tab, setTab] = useState<"Still on" | "Completed">("Still on");
+  const [uploading, setUploading] = useState(false);
+
+  const handleFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file || !profile) return;
+
+    try {
+      setUploading(true);
+      // Use Base64 directly to bypass CORS issues with Firebase Storage
+      const base64 = await compressImage(file, 400, 400, 0.6);
+      await onUpdateProfile({ photoURL: base64 });
+    } catch (error) {
+      console.error("Error uploading avatar:", error);
+    } finally {
+      setUploading(false);
+    }
+  };
 
   return (
     <motion.div 
@@ -1877,8 +2688,29 @@ function ProfileView({
     >
       <div className="flex items-center justify-between mb-8">
         <div className="flex items-center gap-4">
-          <div className="w-20 h-20 rounded-3xl overflow-hidden shadow-md">
-            <img src={profile?.photoURL || "https://picsum.photos/seed/user/100"} className="w-full h-full object-cover" alt="profile" />
+          <div className="relative group">
+            <div className="w-20 h-20 rounded-3xl overflow-hidden shadow-md bg-gray-100">
+              <img 
+                src={profile?.photoURL || `https://api.dicebear.com/7.x/avataaars/svg?seed=${profile?.uid}`} 
+                className={cn("w-full h-full object-cover transition-opacity", uploading && "opacity-50")} 
+                alt="profile" 
+              />
+              {uploading && (
+                <div className="absolute inset-0 flex items-center justify-center">
+                  <div className="w-6 h-6 border-2 border-primary border-t-transparent rounded-full animate-spin" />
+                </div>
+              )}
+            </div>
+            <label className="absolute inset-0 flex items-center justify-center bg-black/40 opacity-0 group-hover:opacity-100 transition-opacity cursor-pointer rounded-3xl">
+              <Camera className="w-6 h-6 text-white" />
+              <input 
+                type="file" 
+                className="hidden" 
+                accept="image/*"
+                onChange={handleFileChange}
+                disabled={uploading}
+              />
+            </label>
           </div>
           <div>
             <h2 className="text-2xl font-black text-gray-900 leading-tight">{profile?.displayName}</h2>
@@ -1906,8 +2738,11 @@ function ProfileView({
         className="w-full mb-8 p-5 bg-gradient-to-br from-primary to-primary-hover rounded-3xl flex items-center justify-between group shadow-xl shadow-primary/20 transition-all active:scale-95"
       >
         <div className="flex items-center gap-4">
-          <div className="w-14 h-14 bg-white/20 backdrop-blur-md rounded-2xl flex items-center justify-center text-white">
+          <div className="w-14 h-14 bg-white/20 backdrop-blur-md rounded-2xl flex items-center justify-center text-white relative">
             <Package className="w-8 h-8" />
+            {products.some(p => p.sellerNotified === false) && (
+              <div className="absolute -top-1 -right-1 w-3 h-3 bg-yellow-400 rounded-full border-2 border-primary shadow-sm" />
+            )}
           </div>
           <div className="text-left">
             <h4 className="text-lg font-black text-white">Manage My Orders</h4>
@@ -1922,12 +2757,27 @@ function ProfileView({
       <div className="grid grid-cols-2 gap-4 mb-8">
         <div className="bg-white p-4 rounded-2xl shadow-sm border border-black/5 text-center">
           <p className="text-2xl font-black text-primary">
+            {profile?.salesCount || 0}
+          </p>
+          <p className="text-[10px] text-gray-400 font-bold uppercase tracking-wider">Total Sales</p>
+        </div>
+        <div className="bg-white p-4 rounded-2xl shadow-sm border border-black/5 text-center">
+          <p className="text-2xl font-black text-primary">
+            {profile?.purchasesCount || 0}
+          </p>
+          <p className="text-[10px] text-gray-400 font-bold uppercase tracking-wider">Total Purchases</p>
+        </div>
+      </div>
+
+      <div className="grid grid-cols-2 gap-4 mb-8">
+        <div className="bg-gray-50 p-4 rounded-2xl border border-gray-100 text-center">
+          <p className="text-xl font-black text-gray-700">
             {products.filter(p => p.status === "Completed" || p.status === "Sold").length}
           </p>
           <p className="text-[10px] text-gray-400 font-bold uppercase tracking-wider">Items Sold</p>
         </div>
-        <div className="bg-white p-4 rounded-2xl shadow-sm border border-black/5 text-center">
-          <p className="text-2xl font-black text-primary">
+        <div className="bg-gray-50 p-4 rounded-2xl border border-gray-100 text-center">
+          <p className="text-xl font-black text-gray-700">
             {products.filter(p => p.status === "Still on").length}
           </p>
           <p className="text-[10px] text-gray-400 font-bold uppercase tracking-wider">Active Listings</p>
@@ -1942,53 +2792,11 @@ function ProfileView({
           </p>
         </div>
       )}
-
-      <div className="space-y-6">
-        <div className="flex gap-4 border-b border-gray-100">
-          {(["Still on", "Completed"] as const).map(t => (
-            <button
-              key={t}
-              onClick={() => setTab(t)}
-              className={cn(
-                "pb-3 text-sm font-bold transition-all relative",
-                tab === t ? "text-primary" : "text-gray-400"
-              )}
-            >
-              {t === "Still on" ? "Active Listings" : "Sold Items"}
-              {tab === t && <motion.div layoutId="tab" className="absolute bottom-0 left-0 right-0 h-0.5 bg-primary" />}
-            </button>
-          ))}
-        </div>
-
-        <div className="grid grid-cols-2 gap-4">
-          {products.filter(p => {
-            if (tab === "Still on") return p.status === "Still on";
-            return p.status === "Completed" || p.status === "Sold";
-          }).length > 0 ? (
-            products.filter(p => {
-              if (tab === "Still on") return p.status === "Still on";
-              return p.status === "Completed" || p.status === "Sold";
-            }).map(product => (
-              <ProductCard 
-                key={product.id} 
-                product={product} 
-                onClick={() => onSelectProduct(product)}
-                isFavorite={favorites.includes(product.id)}
-                onToggleFavorite={onToggleFavorite}
-              />
-            ))
-          ) : (
-            <div className="col-span-2 py-12 text-center text-gray-400 text-sm">
-              No items in this category.
-            </div>
-          )}
-        </div>
-      </div>
     </motion.div>
   );
 }
 
-function ChatView({ rooms, onSelectRoom }: { key?: string; rooms: ChatRoom[], onSelectRoom: (room: ChatRoom) => void }) {
+function ChatView({ rooms, onSelectRoom, currentUserId, users }: { key?: string; rooms: ChatRoom[], onSelectRoom: (room: ChatRoom) => void, currentUserId: string, users: Record<string, UserProfile> }) {
   return (
     <motion.div 
       initial={{ opacity: 0 }}
@@ -1998,26 +2806,45 @@ function ChatView({ rooms, onSelectRoom }: { key?: string; rooms: ChatRoom[], on
       <h2 className="text-2xl font-black mb-6">Messages</h2>
       {rooms.length > 0 ? (
         <div className="space-y-3">
-          {rooms.map(room => (
-            <button 
-              key={room.id}
-              onClick={() => onSelectRoom(room)}
-              className="w-full bg-white p-4 rounded-3xl flex items-center gap-4 border border-black/5 shadow-sm hover:bg-gray-50 transition-all text-left"
-            >
-              <div className="w-14 h-14 rounded-2xl overflow-hidden bg-gray-100 flex-shrink-0">
-                <img src={room.productImage || "https://picsum.photos/seed/product/100"} className="w-full h-full object-cover" alt="product" />
-              </div>
-              <div className="flex-1 min-w-0">
-                <h4 className="font-bold text-gray-900 truncate">{room.productTitle}</h4>
-                <p className="text-sm text-gray-500 truncate">{room.lastMessage}</p>
-              </div>
-              <div className="text-right flex-shrink-0">
-                <p className="text-[10px] text-gray-400 font-bold uppercase">
-                  {room.lastMessageAt ? new Date(room.lastMessageAt).toLocaleDateString() : ""}
-                </p>
-              </div>
-            </button>
-          ))}
+          {rooms.map(room => {
+            const otherParticipantId = room.participants.find(id => id !== currentUserId);
+            const otherUser = otherParticipantId ? users[otherParticipantId] : null;
+            const otherUserName = otherUser?.displayName || "User";
+            const otherUserAvatar = otherUser?.photoURL || `https://api.dicebear.com/7.x/avataaars/svg?seed=${otherParticipantId}`;
+
+            return (
+              <button 
+                key={room.id}
+                onClick={() => onSelectRoom(room)}
+                className="w-full bg-white p-4 rounded-3xl flex items-center gap-4 border border-black/5 shadow-sm hover:bg-gray-50 transition-all text-left relative overflow-hidden"
+              >
+                <div className="w-14 h-14 rounded-2xl overflow-hidden bg-gray-100 flex-shrink-0 relative">
+                  <img src={room.productImage || "https://picsum.photos/seed/product/100"} className="w-full h-full object-cover" alt="product" />
+                  <div className="absolute -bottom-1 -right-1 w-7 h-7 rounded-full border-2 border-white overflow-hidden shadow-sm">
+                    <img src={otherUserAvatar} className="w-full h-full object-cover" alt="user" />
+                  </div>
+                </div>
+                <div className="flex-1 min-w-0">
+                  <div className="flex items-center gap-2">
+                    <h4 className="font-bold text-gray-900 truncate">{room.productTitle}</h4>
+                    {room.unreadBy?.includes(currentUserId) && (
+                      <span className="w-2 h-2 bg-yellow-400 rounded-full flex-shrink-0" />
+                    )}
+                  </div>
+                  <p className="text-[10px] text-gray-400 font-bold uppercase tracking-wider mb-1">Chatting with {otherUserName}</p>
+                  <p className={cn(
+                    "text-sm truncate",
+                    room.unreadBy?.includes(currentUserId) ? "text-gray-900 font-bold" : "text-gray-500"
+                  )}>{room.lastMessage}</p>
+                </div>
+                <div className="text-right flex-shrink-0">
+                  <p className="text-[10px] text-gray-400 font-bold uppercase">
+                    {room.lastMessageAt ? new Date(room.lastMessageAt).toLocaleDateString() : ""}
+                  </p>
+                </div>
+              </button>
+            );
+          })}
         </div>
       ) : (
         <div className="flex flex-col items-center justify-center py-20 text-center">
@@ -2034,11 +2861,25 @@ function ChatView({ rooms, onSelectRoom }: { key?: string; rooms: ChatRoom[], on
   );
 }
 
-function ChatRoomView({ room, onBack, currentUser }: { key?: string; room: ChatRoom, onBack: () => void, currentUser: FirebaseUser }) {
+function ChatRoomView({ room, onBack, currentUser, profile, users, onViewSellerShop }: { key?: string; room: ChatRoom, onBack: () => void, currentUser: FirebaseUser, profile: UserProfile | null, users: Record<string, UserProfile>, onViewSellerShop: (sellerId: string) => void }) {
   const [messages, setMessages] = useState<Message[]>([]);
   const [newMessage, setNewMessage] = useState("");
   const [sending, setSending] = useState(false);
   const scrollRef = useRef<HTMLDivElement>(null);
+
+  const otherParticipantId = room.participants.find(id => id !== currentUser.uid);
+  const otherUser = otherParticipantId ? users[otherParticipantId] : null;
+  const otherUserName = otherUser?.displayName || "User";
+  const otherUserAvatar = otherUser?.photoURL || `https://api.dicebear.com/7.x/avataaars/svg?seed=${otherParticipantId}`;
+
+  // Clear unread status when room is opened
+  useEffect(() => {
+    if (room.unreadBy?.includes(currentUser.uid)) {
+      const newUnreadBy = room.unreadBy.filter(id => id !== currentUser.uid);
+      updateDoc(doc(db, "chatRooms", room.id), { unreadBy: newUnreadBy })
+        .catch(err => console.error("Failed to clear unread status:", err));
+    }
+  }, [room.id, room.unreadBy, currentUser.uid]);
 
   useEffect(() => {
     const q = query(
@@ -2065,13 +2906,19 @@ function ChatRoomView({ room, onBack, currentUser }: { key?: string; room: ChatR
     try {
       const msgData = {
         senderId: currentUser.uid,
+        senderName: profile?.displayName || "Anonymous",
+        senderAvatar: profile?.photoURL || "",
         text: newMessage.trim(),
         createdAt: new Date().toISOString()
       };
       await addDoc(collection(db, "chatRooms", room.id, "messages"), msgData);
+      
+      // Update room with last message and notify other participants
+      const otherParticipants = room.participants.filter(id => id !== currentUser.uid);
       await updateDoc(doc(db, "chatRooms", room.id), {
         lastMessage: newMessage.trim(),
-        lastMessageAt: new Date().toISOString()
+        lastMessageAt: new Date().toISOString(),
+        unreadBy: otherParticipants
       });
       setNewMessage("");
     } catch (error) {
@@ -2093,39 +2940,88 @@ function ChatRoomView({ room, onBack, currentUser }: { key?: string; room: ChatR
         <button onClick={onBack} className="p-2 -ml-2 text-gray-600">
           <ChevronLeft className="w-6 h-6" />
         </button>
-        <div className="w-10 h-10 rounded-xl overflow-hidden bg-gray-100 flex-shrink-0">
+        <div 
+          onClick={() => otherParticipantId && onViewSellerShop(otherParticipantId)}
+          className="w-10 h-10 rounded-xl overflow-hidden bg-gray-100 flex-shrink-0 relative cursor-pointer hover:scale-105 transition-transform"
+        >
           <img src={room.productImage || "https://picsum.photos/seed/product/100"} className="w-full h-full object-cover" alt="product" />
+          <div className="absolute -bottom-1 -right-1 w-5 h-5 rounded-full border border-white overflow-hidden shadow-sm">
+            <img src={otherUserAvatar} className="w-full h-full object-cover" alt="user" />
+          </div>
         </div>
-        <div className="flex-1 min-w-0">
-          <h4 className="font-bold text-gray-900 truncate text-sm">{room.productTitle}</h4>
-          <p className="text-[10px] text-gray-400 font-bold uppercase tracking-wider">Chatting about item</p>
+        <div 
+          onClick={() => otherParticipantId && onViewSellerShop(otherParticipantId)}
+          className="flex-1 min-w-0 cursor-pointer group"
+        >
+          <h4 className="font-bold text-gray-900 truncate text-sm group-hover:text-primary transition-colors">{room.productTitle}</h4>
+          <p className="text-[10px] text-gray-400 font-bold uppercase tracking-wider group-hover:text-primary/70 transition-colors">Chatting with {otherUserName}</p>
         </div>
       </div>
 
       {/* Messages */}
       <div 
         ref={scrollRef}
-        className="flex-1 overflow-y-auto p-4 space-y-4 bg-gray-50/50"
+        className="flex-1 overflow-y-auto p-4 space-y-6 bg-gray-50/50"
       >
-        {messages.map(msg => {
+        {messages.map((msg, idx) => {
+          const isSystem = msg.senderId === "system";
           const isMe = msg.senderId === currentUser.uid;
+          const isFirstInGroup = idx === 0 || messages[idx-1].senderId !== msg.senderId;
+          const showName = !isMe && !isSystem && isFirstInGroup;
+          
+          const sender = users[msg.senderId];
+          const senderName = isSystem ? "System" : (sender?.displayName || msg.senderName);
+          const senderAvatar = isSystem 
+            ? "https://api.dicebear.com/7.x/bottts/svg?seed=system" 
+            : (sender?.photoURL || `https://api.dicebear.com/7.x/avataaars/svg?seed=${msg.senderId}`);
+
+          if (isSystem) {
+            return (
+              <div key={msg.id} className="flex flex-col items-center justify-center space-y-2 py-4">
+                <div className="bg-yellow-50 border border-yellow-100 rounded-2xl px-6 py-3 max-w-[90%] text-center shadow-sm">
+                  <div className="flex items-center justify-center gap-2 mb-1">
+                    <div className="w-5 h-5 bg-yellow-400 rounded-full flex items-center justify-center text-white">
+                      <Bell className="w-3 h-3" />
+                    </div>
+                    <span className="text-[10px] font-black text-yellow-600 uppercase tracking-widest">System Notification</span>
+                  </div>
+                  <p className="text-sm font-bold text-gray-800 leading-relaxed">{msg.text}</p>
+                </div>
+                <span className="text-[9px] text-gray-400 font-bold uppercase tracking-wider">
+                  {new Date(msg.createdAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+                </span>
+              </div>
+            );
+          }
+
           return (
             <div 
               key={msg.id}
               className={cn(
-                "flex flex-col max-w-[80%]",
-                isMe ? "ml-auto items-end" : "mr-auto items-start"
+                "flex gap-3 max-w-[85%]",
+                isMe ? "ml-auto flex-row-reverse" : "mr-auto"
               )}
             >
-              <div className={cn(
-                "px-4 py-2 rounded-2xl text-sm font-medium shadow-sm",
-                isMe ? "bg-primary text-white rounded-tr-none" : "bg-white text-gray-800 rounded-tl-none border border-black/5"
-              )}>
-                {msg.text}
+              <div className="w-8 h-8 rounded-full overflow-hidden bg-gray-200 flex-shrink-0 mt-1">
+                <img src={senderAvatar} className="w-full h-full object-cover" alt="avatar" />
               </div>
-              <span className="text-[9px] text-gray-400 mt-1 px-1">
-                {new Date(msg.createdAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
-              </span>
+              
+              <div className={cn("flex flex-col", isMe ? "items-end" : "items-start")}>
+                {showName && (
+                  <span className="text-[10px] font-bold text-gray-500 mb-1 ml-1">
+                    {senderName}
+                  </span>
+                )}
+                <div className={cn(
+                  "px-4 py-2 rounded-2xl text-sm font-medium shadow-sm",
+                  isMe ? "bg-primary text-white rounded-tr-none" : "bg-white text-gray-800 rounded-tl-none border border-black/5"
+                )}>
+                  {msg.text}
+                </div>
+                <span className="text-[9px] text-gray-400 mt-1 px-1">
+                  {new Date(msg.createdAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+                </span>
+              </div>
             </div>
           );
         })}
@@ -2154,15 +3050,19 @@ function ChatRoomView({ room, onBack, currentUser }: { key?: string; room: ChatR
 
 function FavoritesView({ 
   products, 
+  users,
   onSelectProduct,
   favorites,
-  onToggleFavorite
+  onToggleFavorite,
+  onViewSellerShop
 }: { 
   key?: string;
   products: Product[], 
+  users: Record<string, UserProfile>,
   onSelectProduct: (p: Product) => void,
   favorites: string[],
-  onToggleFavorite: (id: string) => void
+  onToggleFavorite: (id: string) => void,
+  onViewSellerShop: (sellerId: string) => void
 }) {
   return (
     <motion.div 
@@ -2178,9 +3078,11 @@ function FavoritesView({
             <ProductCard 
               key={product.id} 
               product={product} 
+              users={users}
               onClick={() => onSelectProduct(product)}
               isFavorite={favorites.includes(product.id)}
               onToggleFavorite={onToggleFavorite}
+              onViewSellerShop={onViewSellerShop}
             />
           ))}
         </div>
@@ -2217,7 +3119,7 @@ function SettingsView({ profile, onLogout }: { profile: UserProfile | null, onLo
         <div className="space-y-3">
           <p className="text-[10px] font-bold text-gray-400 uppercase tracking-widest px-1">Account</p>
           <div className="bg-white rounded-3xl p-4 flex items-center gap-4 border border-black/5 shadow-sm">
-            <img src={profile?.photoURL || "https://picsum.photos/seed/user/100"} className="w-12 h-12 rounded-2xl object-cover" alt="profile" />
+            <img src={profile?.photoURL || `https://api.dicebear.com/7.x/avataaars/svg?seed=${profile?.uid}`} className="w-12 h-12 rounded-2xl object-cover" alt="profile" />
             <div className="flex-1">
               <h4 className="font-bold text-gray-900">{profile?.displayName}</h4>
               <p className="text-xs text-gray-400">{profile?.email}</p>
@@ -2254,16 +3156,21 @@ function SettingsView({ profile, onLogout }: { profile: UserProfile | null, onLo
   );
 }
 
-function NavButton({ icon: Icon, active, onClick }: { icon: any, active: boolean, onClick: () => void }) {
+function NavButton({ icon: Icon, active, onClick, badgeCount }: { icon: any, active: boolean, onClick: () => void, badgeCount?: number }) {
   return (
     <button 
       onClick={onClick}
       className={cn(
-        "p-2 transition-all rounded-xl",
+        "p-2 transition-all rounded-xl relative",
         active ? "text-primary bg-primary/5" : "text-gray-400 hover:text-gray-600"
       )}
     >
       <Icon className={cn("w-6 h-6", active && "fill-current")} />
+      {badgeCount !== undefined && badgeCount > 0 && (
+        <span className="absolute -top-1 -right-1 min-w-[18px] h-[18px] bg-red-500 text-white text-[10px] font-bold rounded-full flex items-center justify-center border-2 border-white px-1">
+          {badgeCount > 99 ? "99+" : badgeCount}
+        </span>
+      )}
     </button>
   );
 }

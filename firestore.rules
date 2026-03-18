@@ -16,7 +16,8 @@ service cloud.firestore {
     //   - photoURL: string (optional)
     //   - isStudent: boolean (optional)
     //   - dormLocation: string (optional)
-    //   - transactionCount: number (optional)
+    //   - salesCount: number (optional)
+    //   - purchasesCount: number (optional)
     //
     // Collection: products
     // Document ID: {productId}
@@ -31,6 +32,8 @@ service cloud.firestore {
     //   - sellerId: string (required)
     //   - sellerName: string (required)
     //   - sellerAvatar: string (optional)
+    //   - sellerSalesCount: number (optional)
+    //   - sellerPurchasesCount: number (optional)
     //   - dormLocation: string (required)
     //   - departureDate: string (required)
     //   - referenceLink: string (optional)
@@ -83,6 +86,8 @@ service cloud.firestore {
              data.createdAt is string &&
              (!('sellerIsStudent' in data) || data.sellerIsStudent is bool) &&
              (!('sellerAvatar' in data) || data.sellerAvatar is string) &&
+             (!('sellerSalesCount' in data) || data.sellerSalesCount is number) &&
+             (!('sellerPurchasesCount' in data) || data.sellerPurchasesCount is number) &&
              (!('buyerId' in data) || data.buyerId is string) &&
              (!('buyerName' in data) || data.buyerName is string);
     }
@@ -94,7 +99,20 @@ service cloud.firestore {
     match /users/{userId} {
       allow read: if isAuthenticated();
       allow create: if isOwner(userId) && isValidUser(request.resource.data);
-      allow update: if isOwner(userId);
+      allow update: if isOwner(userId) || 
+                      (isAuthenticated() && 
+                       request.resource.data.diff(resource.data).affectedKeys().hasOnly(['salesCount', 'purchasesCount', 'cart']) &&
+                       (
+                         (!('salesCount' in request.resource.data.diff(resource.data).affectedKeys()) || 
+                          (!('salesCount' in resource.data) && request.resource.data.salesCount == 1) ||
+                          (request.resource.data.salesCount == resource.data.salesCount + 1)) &&
+                         (!('purchasesCount' in request.resource.data.diff(resource.data).affectedKeys()) || 
+                          (!('purchasesCount' in resource.data) && request.resource.data.purchasesCount == 1) ||
+                          (request.resource.data.purchasesCount == resource.data.purchasesCount + 1)) &&
+                         (!('cart' in request.resource.data.diff(resource.data).affectedKeys()) || 
+                          request.resource.data.cart is list)
+                       )
+                      );
     }
     
     match /products/{productId} {
