@@ -2,172 +2,215 @@ rules_version = '2';
 
 service cloud.firestore {
   match /databases/{database}/documents {
-    
-    // ===============================================================
-    // Assumed Data Model
-    // ===============================================================
-    //
-    // Collection: users
-    // Document ID: {userId}
-    // Fields:
-    //   - uid: string (required)
-    //   - displayName: string (required)
-    //   - email: string (required)
-    //   - photoURL: string (optional)
-    //   - isStudent: boolean (optional)
-    //   - dormLocation: string (optional)
-    //   - salesCount: number (optional)
-    //   - purchasesCount: number (optional)
-    //
-    // Collection: products
-    // Document ID: {productId}
-    // Fields:
-    //   - id: string (optional)
-    //   - title: string (required)
-    //   - price: number (required)
-    //   - category: string (required)
-    //   - condition: string (required)
-    //   - description: string (required)
-    //   - images: list (required)
-    //   - sellerId: string (required)
-    //   - sellerName: string (required)
-    //   - sellerAvatar: string (optional)
-    //   - sellerSalesCount: number (optional)
-    //   - sellerPurchasesCount: number (optional)
-    //   - dormLocation: string (required)
-    //   - departureDate: string (required)
-    //   - referenceLink: string (optional)
-    //   - status: string (required, 'Still on' or 'Sold')
-    //   - createdAt: string (required)
-    //
-    // ===============================================================
-
-    // ===============================================================
-    // Helper Functions
-    // ===============================================================
-    
     function isAuthenticated() {
       return request.auth != null;
     }
-    
-    function isAdmin() {
-      return isAuthenticated() &&
-        (get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'admin' ||
-          (request.auth.token.email == "michael20020320@gmail.com" && request.auth.token.email_verified == true));
-    }
-    
+
     function isOwner(userId) {
       return isAuthenticated() && request.auth.uid == userId;
     }
-    
-    function isDocOwner() {
-      return isAuthenticated() && request.auth.uid == resource.data.sellerId;
+
+    function isAdmin() {
+      return isAuthenticated() && request.auth.token.admin == true;
     }
     
+    // NEW: 严格校验真实邮箱后缀是否为学生邮箱
+    function isEduEmail() {
+      return request.auth.token.email != null &&
+             (request.auth.token.email.matches('.*\\.edu$') ||
+              request.auth.token.email.matches('.*\\.ca$'));
+    }
+
+    function allowedUserKeys() {
+      return [
+        'displayName',
+        'photoURL',
+        'isStudent',
+        'dormLocation',
+        'school',
+        'majorInfo',
+        'gradYear',
+        'departureDate'
+      ];
+    }
+
     function isValidUser(data) {
-      return data.keys().hasAll(['displayName']) &&
-             data.displayName is string && data.displayName.size() > 0 && data.displayName.size() < 100 &&
-             (!('photoURL' in data) || (data.photoURL is string && data.photoURL.size() < 1000)) &&
-             (!('dormLocation' in data) || (data.dormLocation is string && data.dormLocation.size() < 200)) &&
-             (!('salesCount' in data) || data.salesCount is number) &&
-             (!('purchasesCount' in data) || data.purchasesCount is number);
+      return data.keys().hasOnly(allowedUserKeys()) &&
+        data.keys().hasAll(['displayName']) &&
+        data.displayName is string && data.displayName.size() > 0 && data.displayName.size() < 100 &&
+        (!('photoURL' in data) || (data.photoURL is string && data.photoURL.size() < 3000)) &&
+        // FIX 3: 强制判定，前端传过来的 isStudent 必须与 Token 实际解析出的结果一致
+        (!('isStudent' in data) || (data.isStudent is bool && data.isStudent == isEduEmail())) &&
+        (!('dormLocation' in data) || (data.dormLocation is string && data.dormLocation.size() < 200)) &&
+        (!('school' in data) || (data.school is string && data.school.size() < 120)) &&
+        (!('majorInfo' in data) || (data.majorInfo is string && data.majorInfo.size() < 120)) &&
+        (!('gradYear' in data) || (data.gradYear is string && data.gradYear.size() < 40)) &&
+        (!('departureDate' in data) || (data.departureDate is string && data.departureDate.size() < 40));
+    }
+
+    function allowedPrivateKeys() {
+      return ['email', 'favorites', 'cart'];
     }
 
     function isValidUserPrivate(data) {
-      return data.keys().hasAll(['email']) &&
-             data.email is string && data.email.size() < 100 &&
-             (!('favorites' in data) || (data.favorites is list && data.favorites.size() <= 500)) &&
-             (!('cart' in data) || (data.cart is list && data.cart.size() <= 100));
+      return data.keys().hasOnly(allowedPrivateKeys()) &&
+        data.keys().hasAll(['email']) &&
+        data.email is string && data.email.size() < 200 &&
+        (!('favorites' in data) || (data.favorites is list && data.favorites.size() <= 500)) &&
+        (!('cart' in data) || (data.cart is list && data.cart.size() <= 100));
     }
-    
+
     function isValidProduct(data) {
-      return data.keys().hasAll(['title', 'price', 'category', 'condition', 'description', 'images', 'sellerId', 'sellerName', 'dormLocation', 'departureDate', 'status', 'createdAt']) &&
-             data.title is string && data.title.size() > 0 && data.title.size() < 200 &&
-             data.price is number && data.price >= 0 &&
-             data.category is string &&
-             data.condition is string &&
-             data.description is string && data.description.size() < 2000 &&
-             data.images is list && data.images.size() <= 10 &&
-             data.sellerId is string &&
-             data.sellerName is string &&
-             data.dormLocation is string &&
-             data.departureDate is string &&
-             data.status in ['Still on', 'Pending', 'Delivered', 'Completed', 'Sold'] &&
-             data.createdAt is string &&
-             (!('sellerIsStudent' in data) || data.sellerIsStudent is bool) &&
-             (!('sellerAvatar' in data) || (data.sellerAvatar is string && data.sellerAvatar.size() < 1000)) &&
-             (!('sellerSalesCount' in data) || data.sellerSalesCount is number) &&
-             (!('sellerPurchasesCount' in data) || data.sellerPurchasesCount is number) &&
-             (!('buyerId' in data) || data.buyerId is string) &&
-             (!('buyerName' in data) || data.buyerName is string);
+      return data.keys().hasAll([
+        'title', 'price', 'category', 'condition', 'description', 'images',
+        'sellerId', 'sellerName', 'dormLocation', 'departureDate', 'status', 'createdAt'
+      ]) &&
+        data.title is string && data.title.size() > 0 && data.title.size() < 200 &&
+        data.price is number && data.price >= 0 &&
+        data.category is string && data.category.size() < 80 &&
+        data.condition is string && data.condition.size() < 80 &&
+        data.description is string && data.description.size() < 2000 &&
+        data.images is list && data.images.size() <= 10 &&
+        data.sellerId is string &&
+        data.sellerName is string && data.sellerName.size() < 120 &&
+        data.dormLocation is string && data.dormLocation.size() < 200 &&
+        data.departureDate is string && data.departureDate.size() < 40 &&
+        data.status in ['Still on', 'Pending', 'Delivered', 'Completed', 'Sold'] &&
+        data.createdAt is string &&
+        (!('sellerIsStudent' in data) || data.sellerIsStudent is bool) &&
+        (!('sellerAvatar' in data) || (data.sellerAvatar is string && data.sellerAvatar.size() < 3000)) &&
+        (!('sellerSalesCount' in data) || data.sellerSalesCount is number) &&
+        (!('sellerPurchasesCount' in data) || data.sellerPurchasesCount is number) &&
+        (!('buyerId' in data) || data.buyerId is string) &&
+        (!('buyerName' in data) || data.buyerName is string) &&
+        (!('deliveredAt' in data) || data.deliveredAt is string) &&
+        (!('completedAt' in data) || data.completedAt is string) &&
+        (!('sellerNotified' in data) || data.sellerNotified is bool) &&
+        (!('referenceLink' in data) || data.referenceLink is string);
+    }
+
+    function sellerCanEditListing() {
+      return request.auth.uid == resource.data.sellerId &&
+        resource.data.status == 'Still on' &&
+        request.resource.data.sellerId == resource.data.sellerId &&
+        request.resource.data.buyerId == resource.data.buyerId;
+    }
+
+    function buyerCanReserveListing() {
+      return resource.data.status == 'Still on' &&
+        request.resource.data.status == 'Pending' &&
+        request.resource.data.buyerId == request.auth.uid &&
+        request.resource.data.sellerId == resource.data.sellerId;
+    }
+
+    function sellerCanMarkDelivered() {
+      return request.auth.uid == resource.data.sellerId &&
+        resource.data.status == 'Pending' &&
+        request.resource.data.status == 'Delivered' &&
+        request.resource.data.buyerId == resource.data.buyerId;
+    }
+
+    function buyerCanCompleteOrder() {
+      return resource.data.buyerId == request.auth.uid &&
+        resource.data.status == 'Delivered' &&
+        request.resource.data.status == 'Completed' &&
+        request.resource.data.sellerId == resource.data.sellerId &&
+        request.resource.data.buyerId == resource.data.buyerId;
+    }
+
+    function sellerCanResetOrder() {
+      return request.auth.uid == resource.data.sellerId &&
+        resource.data.status in ['Pending', 'Delivered'] &&
+        request.resource.data.status == 'Still on' &&
+        request.resource.data.sellerId == resource.data.sellerId;
+    }
+
+    function sellerCanMarkSold() {
+      return request.auth.uid == resource.data.sellerId &&
+        resource.data.status == 'Still on' &&
+        request.resource.data.status == 'Sold' &&
+        request.resource.data.sellerId == resource.data.sellerId;
     }
 
     function isValidChatRoom(data) {
-      return data.keys().hasAll(['participants', 'productId']) &&
-             data.participants is list && data.participants.size() == 2 &&
-             data.productId is string &&
-             (!('lastMessage' in data) || (data.lastMessage is string && data.lastMessage.size() < 1000)) &&
-             (!('lastMessageAt' in data) || data.lastMessageAt is string) &&
-             (!('productTitle' in data) || data.productTitle is string) &&
-             (!('productImage' in data) || data.productImage is string) &&
-             (!('unreadBy' in data) || data.unreadBy is list);
+      return data.keys().hasOnly([
+        'participants', 'productId', 'productTitle', 'productImage',
+        'lastMessage', 'lastMessageAt', 'unreadBy'
+      ]) &&
+        data.keys().hasAll(['participants', 'productId']) &&
+        data.participants is list && data.participants.size() == 2 &&
+        data.productId is string &&
+        (!('productTitle' in data) || data.productTitle is string) &&
+        (!('productImage' in data) || data.productImage is string) &&
+        (!('lastMessage' in data) || (data.lastMessage is string && data.lastMessage.size() < 1000)) &&
+        (!('lastMessageAt' in data) || data.lastMessageAt is string) &&
+        (!('unreadBy' in data) || data.unreadBy is list);
+    }
+
+    function chatRoomCoreFieldsUnchanged() {
+      return request.resource.data.participants == resource.data.participants &&
+        request.resource.data.productId == resource.data.productId;
     }
 
     function isValidMessage(data) {
-      return data.keys().hasAll(['senderId', 'text', 'createdAt']) &&
-             data.senderId is string &&
-             data.text is string && data.text.size() > 0 && data.text.size() < 2000 &&
-             data.createdAt is string;
+      return data.keys().hasOnly(['senderId', 'senderName', 'senderAvatar', 'text', 'createdAt']) &&
+        data.keys().hasAll(['senderId', 'text', 'createdAt']) &&
+        data.senderId is string &&
+        (!('senderName' in data) || data.senderName is string) &&
+        (!('senderAvatar' in data) || data.senderAvatar is string) &&
+        data.text is string && data.text.size() > 0 && data.text.size() < 2000 &&
+        data.createdAt is string;
     }
 
-    // ===============================================================
-    // Rules
-    // ===============================================================
-
     match /users/{userId} {
-      // Public profile info (no email)
       allow read: if isAuthenticated();
       allow create: if isOwner(userId) && isValidUser(request.resource.data);
       allow update: if isOwner(userId) && isValidUser(request.resource.data);
     }
 
     match /users_private/{userId} {
-      // Private info (email, cart, favorites)
       allow read: if isOwner(userId) || isAdmin();
       allow create: if isOwner(userId) && isValidUserPrivate(request.resource.data);
       allow update: if isOwner(userId) && isValidUserPrivate(request.resource.data);
     }
-    
+
     match /products/{productId} {
-      allow read: if true; // Publicly readable for browsing
-      allow create: if isAuthenticated() && 
-                      request.resource.data.sellerId == request.auth.uid && 
-                      isValidProduct(request.resource.data);
-      allow update: if isAuthenticated() && 
-                      (
-                        // Seller can update their own product
-                        isDocOwner() || 
-                        // Buyer can update if they are the assigned buyer
-                        (resource.data.buyerId == request.auth.uid) ||
-                        // Anyone can "buy" if it's still on
-                        (resource.data.status == 'Still on' && request.resource.data.status == 'Pending' && request.resource.data.buyerId == request.auth.uid)
-                      ) &&
-                      isValidProduct(request.resource.data);
-      allow delete: if isDocOwner() && resource.data.status == 'Still on';
+      allow read: if true;
+      allow create: if isAuthenticated() &&
+        request.resource.data.sellerId == request.auth.uid &&
+        request.resource.data.status == 'Still on' &&
+        isValidProduct(request.resource.data);
+      allow update: if isAuthenticated() && isValidProduct(request.resource.data) && (
+        sellerCanEditListing() ||
+        buyerCanReserveListing() ||
+        sellerCanMarkDelivered() ||
+        buyerCanCompleteOrder() ||
+        sellerCanResetOrder() ||
+        sellerCanMarkSold()
+      );
+      allow delete: if isAuthenticated() && request.auth.uid == resource.data.sellerId && resource.data.status == 'Still on';
     }
 
     match /chatRooms/{roomId} {
       allow read: if isAuthenticated() && request.auth.uid in resource.data.participants;
-      allow create: if isAuthenticated() && request.auth.uid in request.resource.data.participants && isValidChatRoom(request.resource.data);
-      allow update: if isAuthenticated() && request.auth.uid in resource.data.participants && isValidChatRoom(request.resource.data);
+      // FIX 5: 增加跨表校验，建群时目标参与者之一必须是该商品的真实卖家
+      allow create: if isAuthenticated() &&
+        request.auth.uid in request.resource.data.participants &&
+        isValidChatRoom(request.resource.data) &&
+        (get(/databases/$(database)/documents/products/$(request.resource.data.productId)).data.sellerId in request.resource.data.participants);
+        
+      allow update: if isAuthenticated() &&
+        request.auth.uid in resource.data.participants &&
+        chatRoomCoreFieldsUnchanged() &&
+        isValidChatRoom(request.resource.data);
     }
 
     match /chatRooms/{roomId}/messages/{messageId} {
       allow read: if isAuthenticated() && request.auth.uid in get(/databases/$(database)/documents/chatRooms/$(roomId)).data.participants;
-      allow create: if isAuthenticated() && 
-                      request.auth.uid in get(/databases/$(database)/documents/chatRooms/$(roomId)).data.participants &&
-                      request.resource.data.senderId == request.auth.uid &&
-                      isValidMessage(request.resource.data);
+      allow create: if isAuthenticated() &&
+        request.auth.uid in get(/databases/$(database)/documents/chatRooms/$(roomId)).data.participants &&
+        request.resource.data.senderId == request.auth.uid &&
+        isValidMessage(request.resource.data);
     }
   }
 }

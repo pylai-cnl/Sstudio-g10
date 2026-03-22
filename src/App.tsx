@@ -1,70 +1,20 @@
 import React, { Component, useState, useEffect, useMemo, useRef, useCallback } from "react";
 import { 
-  Search, 
-  ShoppingCart, 
-  PlusCircle, 
-  MessageCircle, 
-  User, 
-  Heart, 
-  Settings, 
-  Home,
-  ChevronLeft, 
-  Camera, 
-  MapPin, 
-  Calendar, 
-  ExternalLink,
-  LogOut,
-  Trash2,
-  CheckCircle2,
-  Pencil,
-  X,
-  AlertTriangle,
-  Bell,
-  Shield,
-  HelpCircle,
-  Info,
-  Heart as HeartIcon,
-  MessageSquare,
-  Send,
-  AlertCircle,
-  Package,
-  Clock,
-  CheckCircle,
-  XCircle,
-  Truck,
-  Store,
-  ShieldCheck,
-  ChevronRight,
-  CreditCard,
-  List,
-  ArrowLeft,
-  Plus
+  Search, ShoppingCart, PlusCircle, MessageCircle, User, Heart, Settings, Home,
+  ChevronLeft, Camera, MapPin, Calendar, ExternalLink, LogOut, Trash2,
+  CheckCircle2, Pencil, X, AlertTriangle, Bell, Shield, HelpCircle, Info,
+  Heart as HeartIcon, MessageSquare, Send, AlertCircle, Package, Clock,
+  CheckCircle, XCircle, Truck, Store, ShieldCheck, ChevronRight, CreditCard,
+  List, ArrowLeft, Plus
 } from "lucide-react";
 import { motion, AnimatePresence } from "motion/react";
 import { 
-  onAuthStateChanged, 
-  signInWithPopup, 
-  GoogleAuthProvider, 
-  signOut,
-  User as FirebaseUser,
-  createUserWithEmailAndPassword,
-  signInWithEmailAndPassword
+  onAuthStateChanged, signInWithPopup, GoogleAuthProvider, signOut,
+  User as FirebaseUser, createUserWithEmailAndPassword, signInWithEmailAndPassword
 } from "firebase/auth";
 import { 
-  collection, 
-  query, 
-  orderBy, 
-  where,
-  onSnapshot, 
-  addDoc, 
-  updateDoc, 
-  deleteDoc,
-  doc, 
-  getDoc,
-  setDoc,
-  getDocFromServer,
-  increment,
-  arrayUnion
+  collection, query, orderBy, where, onSnapshot, addDoc, updateDoc, deleteDoc,
+  doc, getDoc, setDoc, runTransaction, limit // FIX 1: 引入 limit
 } from "firebase/firestore";
 import { ref, uploadBytes, getDownloadURL } from "firebase/storage";
 import { auth, db, storage } from "./firebase";
@@ -76,6 +26,8 @@ function cn(...inputs: ClassValue[]) {
   return twMerge(clsx(inputs));
 }
 
+// 保留此函数，某些小头像等场景如果还需要纯本地前端压缩可以使用。
+// 但我们在下面的发布商品时已经弃用了它存储进 Firestore 的错误用法。
 const compressImage = async (file: File, maxWidth = 600, maxHeight = 600, quality = 0.5): Promise<string> => {
   return new Promise((resolve, reject) => {
     const reader = new FileReader();
@@ -155,7 +107,6 @@ interface ProfileViewProps {
   onViewSellerShop: (sellerId: string) => void;
   setIsDirty?: (dirty: boolean) => void;
   showConfirm?: (config: any) => void;
-  // PERSISTENT DATA PROPS
   addresses?: any[];
   setAddresses?: (data: any[]) => void;
   defaultAddrIndex?: number;
@@ -208,7 +159,6 @@ interface ProductCardProps {
   onViewSellerShop: (sellerId: string) => void;
 }
 
-// --- Error Handling ---
 enum OperationType {
   CREATE = 'create',
   UPDATE = 'update',
@@ -312,7 +262,6 @@ class ErrorBoundary extends Component<{ children: React.ReactNode }, { hasError:
   }
 }
 
-// --- App Component ---
 export default function App() {
   return (
     <ErrorBoundary>
@@ -327,7 +276,6 @@ function AppContent() {
   const [view, setView] = useState<View>("home");
   const [viewHistory, setViewHistory] = useState<View[]>(["home"]);
   const [isDirty, setIsDirty] = useState(false);
-  // Elevated states for persistence
   const [addresses, setAddresses] = useState<any[]>([]);
   const [defaultAddrIndex, setDefaultAddrIndex] = useState(0);
   const [payments, setPayments] = useState<any[]>([]);
@@ -369,7 +317,6 @@ function AppContent() {
   };
 
   const showAlert = (title: string, message: string) => {
-    console.log(`Showing alert: [${title}] ${message}`);
     setModalConfig({
       isOpen: true,
       title,
@@ -381,68 +328,149 @@ function AppContent() {
     });
   };
 
-  // Auth and Profile Initialization
+  const ensurePrivateProfileDoc = async (firebaseUser: FirebaseUser) => {
+    const userPrivateDocRef = doc(db, "users_private", firebaseUser.uid);
+    const userPrivateDoc = await getDoc(userPrivateDocRef);
+
+    if (!userPrivateDoc.exists()) {
+      await setDoc(userPrivateDocRef, {
+        email: firebaseUser.email || "",
+        favorites: [],
+        cart: []
+      });
+    }
+
+    return userPrivateDocRef;
+  };
+
+  const updateProductStatusSafely = async (product: Product, nextStatus: Product["status"]) => {
+    if (!user) throw new Error("You must be logged in.");
+
+    await runTransaction(db, async (transaction) => {
+      const productRef = doc(db, "products", product.id);
+      const productSnap = await transaction.get(productRef);
+
+      if (!productSnap.exists()) {
+        throw new Error("Product not found.");
+      }
+
+      const latest = { id: product.id, ...productSnap.data() } as Product;
+      const updates: Partial<Product> = {};
+
+      if (nextStatus === "Pending") {
+        if (latest.status !== "Still on") {
+          throw new Error(`The item "${latest.title}" is no longer available.`);
+        }
+        if (latest.sellerId === user.uid) {
+          throw new Error("You cannot purchase your own item.");
+        }
+        updates.status = "Pending";
+        updates.buyerId = user.uid;
+        updates.buyerName = profile?.displayName || user.displayName || user.email?.split("@")[0] || "Buyer";
+        updates.sellerNotified = false;
+      } else if (nextStatus === "Delivered") {
+        if (latest.status !== "Pending") {
+          throw new Error("Only pending orders can be marked as delivered.");
+        }
+        if (latest.sellerId !== user.uid) {
+          throw new Error("Only the seller can mark an item as delivered.");
+        }
+        updates.status = "Delivered";
+        updates.deliveredAt = new Date().toISOString();
+      } else if (nextStatus === "Completed") {
+        if (latest.status !== "Delivered") {
+          throw new Error("Only delivered orders can be completed.");
+        }
+        if (latest.buyerId !== user.uid) {
+          throw new Error("Only the buyer can complete this order.");
+        }
+        updates.status = "Completed";
+        updates.completedAt = new Date().toISOString();
+      } else if (nextStatus === "Still on") {
+        if (!["Pending", "Delivered"].includes(latest.status)) {
+          throw new Error("This order cannot be reset to available.");
+        }
+        if (latest.sellerId !== user.uid) {
+          throw new Error("Only the seller can cancel this transaction.");
+        }
+        updates.status = "Still on";
+        updates.buyerId = "";
+        updates.buyerName = "";
+        updates.deliveredAt = "";
+        updates.completedAt = "";
+        updates.sellerNotified = true;
+      } else if (nextStatus === "Sold") {
+        if (latest.sellerId !== user.uid) {
+          throw new Error("Only the seller can mark this item as sold.");
+        }
+        updates.status = "Sold";
+      } else {
+        throw new Error("Unsupported status transition.");
+      }
+
+      transaction.update(productRef, updates as any);
+    });
+  };
+
   useEffect(() => {
     let profileUnsubscribe: (() => void) | null = null;
+    let privateUnsubscribe: (() => void) | null = null;
     let chatRoomsUnsubscribe: (() => void) | null = null;
 
     const unsubscribe = onAuthStateChanged(auth, async (user) => {
-      console.log("Auth state changed:", user?.uid);
-      
-      // Cleanup previous listeners
-      if (profileUnsubscribe) profileUnsubscribe();
-      if (chatRoomsUnsubscribe) chatRoomsUnsubscribe();
-      
+      profileUnsubscribe?.();
+      privateUnsubscribe?.();
+      chatRoomsUnsubscribe?.();
+      profileUnsubscribe = null;
+      privateUnsubscribe = null;
+      chatRoomsUnsubscribe = null;
+
       setUser(user);
 
       if (user) {
         setLoading(true);
         try {
           const userDocRef = doc(db, "users", user.uid);
-          const userPrivateDocRef = doc(db, "users_private", user.uid);
-          
+          const userPrivateDocRef = await ensurePrivateProfileDoc(user);
+
           const [userDoc, userPrivateDoc] = await Promise.all([
             getDoc(userDocRef),
             getDoc(userPrivateDocRef)
           ]);
-          
+
           const email = user.email || "";
           const isStudent = email.toLowerCase().endsWith(".edu") || email.toLowerCase().endsWith(".ca");
 
           if (!userDoc.exists()) {
-            console.log("Creating new profile for:", user.uid);
             const newProfile = {
               displayName: user.displayName || email.split("@")[0] || "Anonymous",
               photoURL: user.photoURL || "",
-              isStudent: isStudent,
-              dormLocation: "Cornell Tech House",
-              salesCount: 0,
-              purchasesCount: 0
+              isStudent,
+              dormLocation: "Cornell Tech House"
             };
-            const newPrivateProfile = {
-              email: email,
-              favorites: [],
-              cart: []
-            };
+            const newPrivateProfile = userPrivateDoc.exists()
+              ? userPrivateDoc.data()
+              : { email, favorites: [], cart: [] };
+
             await Promise.all([
               setDoc(userDocRef, newProfile),
-              setDoc(userPrivateDocRef, newPrivateProfile)
+              setDoc(userPrivateDocRef, newPrivateProfile, { merge: true })
             ]);
+
             setProfile({ uid: user.uid, ...newProfile, ...newPrivateProfile } as UserProfile);
           } else {
-            console.log("Profile already exists");
             const existingData = userDoc.data();
-            const existingPrivateData = userPrivateDoc.data() || {};
-            // Keep photoURL in sync with Google if available
+            const existingPrivateData = userPrivateDoc.data() || { email, favorites: [], cart: [] };
+
             if (user.photoURL && existingData.photoURL !== user.photoURL) {
-              console.log("Updating photoURL from Google");
               await updateDoc(userDocRef, { photoURL: user.photoURL });
             }
-            setProfile({ 
-              uid: user.uid, 
-              ...existingData, 
+
+            setProfile({
+              uid: user.uid,
+              ...existingData,
               ...existingPrivateData,
-              ...(user.photoURL ? { photoURL: user.photoURL } : {}) 
+              ...(user.photoURL ? { photoURL: user.photoURL } : {})
             } as UserProfile);
           }
 
@@ -454,8 +482,7 @@ function AppContent() {
             console.error("Profile snapshot error:", error);
           });
 
-          // Also listen to private data
-          const privateUnsubscribe = onSnapshot(userPrivateDocRef, (doc) => {
+          privateUnsubscribe = onSnapshot(userPrivateDocRef, (doc) => {
             if (doc.exists()) {
               setProfile(prev => prev ? { ...prev, ...doc.data() } : { uid: doc.id, ...doc.data() } as UserProfile);
             }
@@ -475,23 +502,13 @@ function AppContent() {
               return dateB - dateA;
             });
             setChatRooms(rooms);
-            
-            // Update selected chat room if it exists
+
             setSelectedChatRoom(prev => {
               if (!prev) return null;
               const updated = rooms.find(r => r.id === prev.id);
               return updated || prev;
             });
-          }, (error) => {
-            console.error("Chat rooms snapshot error:", error);
           });
-
-          return () => {
-            if (profileUnsubscribe) profileUnsubscribe();
-            if (privateUnsubscribe) privateUnsubscribe();
-            if (chatRoomsUnsubscribe) chatRoomsUnsubscribe();
-          };
-
         } catch (error) {
           console.error("Initialization error:", error);
         } finally {
@@ -506,12 +523,12 @@ function AppContent() {
 
     return () => {
       unsubscribe();
-      if (profileUnsubscribe) profileUnsubscribe();
-      if (chatRoomsUnsubscribe) chatRoomsUnsubscribe();
+      profileUnsubscribe?.();
+      privateUnsubscribe?.();
+      chatRoomsUnsubscribe?.();
     };
   }, []);
 
-  // Users Listener
   useEffect(() => {
     if (!user) {
       setUsers({});
@@ -519,7 +536,6 @@ function AppContent() {
     }
     const q = collection(db, "users");
     const unsubscribe = onSnapshot(q, (snapshot) => {
-      console.log(`Users snapshot received: ${snapshot.size} users`);
       const usersMap: Record<string, UserProfile> = {};
       snapshot.docs.forEach(doc => {
         usersMap[doc.id] = { uid: doc.id, ...doc.data() } as UserProfile;
@@ -531,9 +547,11 @@ function AppContent() {
     return unsubscribe;
   }, [user?.uid]);
 
-  // Products Listener
+  // FIX 1: Add limits to prevent crashing and high billing.
+  // We apply limit(100) here to protect the initial load. 
+  // In a robust production environment, you would use startAfter for real pagination.
   useEffect(() => {
-    const q = query(collection(db, "products"), orderBy("createdAt", "desc"));
+    const q = query(collection(db, "products"), orderBy("createdAt", "desc"), limit(100));
     const unsubscribe = onSnapshot(q, (snapshot) => {
       const productData = snapshot.docs.map(doc => ({
         id: doc.id,
@@ -630,10 +648,13 @@ function AppContent() {
     const favorites = profile.favorites || [];
     const newFavorites = favorites.includes(productId)
       ? favorites.filter(id => id !== productId)
-      : [...favorites, productId];
+      : [...favorites, favorites];
     
     try {
-      await updateDoc(doc(db, "users_private", user.uid), { favorites: newFavorites });
+      await setDoc(doc(db, "users_private", user.uid), {
+        email: user.email || profile.email || "",
+        favorites: newFavorites
+      }, { merge: true });
     } catch (error) {
       console.error("Failed to toggle favorite:", error);
     }
@@ -648,7 +669,10 @@ function AppContent() {
     }
     const newCart = [...cart, productId];
     try {
-      await updateDoc(doc(db, "users_private", user.uid), { cart: newCart });
+      await setDoc(doc(db, "users_private", user.uid), {
+        email: user.email || profile.email || "",
+        cart: newCart
+      }, { merge: true });
       showAlert("Added to Cart", "Item has been added to your shopping cart.");
     } catch (error) {
       console.error("Failed to add to cart:", error);
@@ -660,7 +684,10 @@ function AppContent() {
     const cart = profile.cart || [];
     const newCart = cart.filter(id => id !== productId);
     try {
-      await updateDoc(doc(db, "users_private", user.uid), { cart: newCart });
+      await setDoc(doc(db, "users_private", user.uid), {
+        email: user.email || profile.email || "",
+        cart: newCart
+      }, { merge: true });
     } catch (error) {
       console.error("Failed to remove from cart:", error);
     }
@@ -682,18 +709,15 @@ function AppContent() {
       confirmText: "Checkout",
       onConfirm: async () => {
         try {
-          // Update each product status to Pending
+          // FIX 2: Race Condition Fix
+          // Before, we were blindly writing `updateDoc` without checking if the item was already sold.
+          // Now we use the transaction helper which prevents double-buying!
           const promises = cartProducts.map(p => 
-            updateDoc(doc(db, "products", p.id), {
-              status: "Pending",
-              buyerId: user.uid,
-              buyerName: profile.displayName,
-              sellerNotified: false
-            })
+            updateProductStatusSafely(p, "Pending")
           );
+          
           await Promise.all(promises);
           
-          // Send system messages to sellers
           for (const p of cartProducts) {
             await sendSystemMessage(
               p.id, 
@@ -703,14 +727,13 @@ function AppContent() {
             );
           }
           
-          // Clear cart
           await updateDoc(doc(db, "users_private", user.uid), { cart: [] });
           
           showAlert("Success!", "Your orders have been placed. Sellers will be notified.");
           handleViewChange("orders");
-        } catch (error) {
+        } catch (error: any) {
           console.error("Checkout failed:", error);
-          showAlert("Error", "Failed to complete checkout. Please try again.");
+          showAlert("Checkout Error", error.message || "Failed to complete checkout. An item might have already been sold.");
         }
       }
     });
@@ -718,10 +741,10 @@ function AppContent() {
 
   const sendSystemMessage = async (productId: string, sellerId: string, buyerId: string, text: string) => {
     try {
+      if (!user) return;
       const product = products.find(p => p.id === productId);
       if (!product) return;
 
-      // Check if room already exists
       let room = chatRooms.find(r => 
         r.productId === productId && 
         r.participants.includes(sellerId) && 
@@ -729,35 +752,35 @@ function AppContent() {
       );
 
       let roomId = room?.id;
+      const now = new Date().toISOString();
 
       if (!room) {
-        // Create new room
         const roomData = {
           participants: [sellerId, buyerId],
-          productId: productId,
+          productId,
           productTitle: product.title,
           productImage: product.images?.[0] || "",
           lastMessage: text,
-          lastMessageAt: new Date().toISOString(),
-          unreadBy: [sellerId, buyerId] // Both might need to see it
+          lastMessageAt: now,
+          unreadBy: [sellerId]
         };
         const docRef = await addDoc(collection(db, "chatRooms"), roomData);
         roomId = docRef.id;
       } else {
-        // Update existing room
+        const unreadBy = Array.from(new Set([...(room.unreadBy || []), sellerId]));
         await updateDoc(doc(db, "chatRooms", room.id), {
           lastMessage: text,
-          lastMessageAt: new Date().toISOString(),
-          unreadBy: arrayUnion(sellerId, buyerId)
+          lastMessageAt: now,
+          unreadBy
         });
       }
 
       if (roomId) {
         await addDoc(collection(db, "chatRooms", roomId, "messages"), {
-          senderId: "system",
-          senderName: "Relo System",
-          text: text,
-          createdAt: new Date().toISOString()
+          senderId: user.uid,
+          senderName: profile?.displayName || user.displayName || "User",
+          text,
+          createdAt: now
         });
       }
     } catch (error) {
@@ -772,7 +795,6 @@ function AppContent() {
       return;
     }
 
-    // Check if room already exists
     const existingRoom = chatRooms.find(r => 
       r.productId === product.id && 
       r.participants.includes(user.uid) && 
@@ -785,7 +807,6 @@ function AppContent() {
       return;
     }
 
-    // Create new room
     try {
       const roomData = {
         participants: [user.uid, product.sellerId],
@@ -794,7 +815,7 @@ function AppContent() {
         productImage: product.images?.[0] || "",
         lastMessage: "Chat started",
         lastMessageAt: new Date().toISOString(),
-        unreadBy: [product.sellerId] // New chat started, notify the seller
+        unreadBy: [product.sellerId]
       };
       const docRef = await addDoc(collection(db, "chatRooms"), roomData);
       setSelectedChatRoom({ id: docRef.id, ...roomData });
@@ -808,7 +829,7 @@ function AppContent() {
   const updateProfile = async (data: Partial<UserProfile>, silent = false) => {
     if (!user) return;
     try {
-      const publicFields = ["displayName", "photoURL", "isStudent", "dormLocation", "salesCount", "purchasesCount", "school", "majorInfo", "gradYear", "departureDate"];
+      const publicFields = ["displayName", "photoURL", "isStudent", "dormLocation", "school", "majorInfo", "gradYear", "departureDate"];
       const privateFields = ["email", "favorites", "cart"];
       
       const publicUpdate: any = {};
@@ -821,11 +842,15 @@ function AppContent() {
 
       const promises = [];
       if (Object.keys(publicUpdate).length > 0) promises.push(updateDoc(doc(db, "users", user.uid), publicUpdate));
-      if (Object.keys(privateUpdate).length > 0) promises.push(updateDoc(doc(db, "users_private", user.uid), privateUpdate));
+      if (Object.keys(privateUpdate).length > 0) {
+        promises.push(setDoc(doc(db, "users_private", user.uid), {
+          email: user.email || profile?.email || "",
+          ...privateUpdate
+        }, { merge: true }));
+      }
       
       await Promise.all(promises);
       
-      // TRIGGER MODAL ONLY IF NOT SILENT
       if (!silent) {
         setShowSuccessModal(true);
       }
@@ -849,7 +874,6 @@ function AppContent() {
 
   return (
     <div className="min-h-screen flex flex-col bg-gray-50 relative">
-      {/* Desktop Header */}
       <header className="hidden md:block bg-white border-b border-gray-100 sticky top-0 z-50">
         <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 h-16 flex items-center justify-between">
           <div className="flex items-center gap-8">
@@ -944,7 +968,6 @@ function AppContent() {
         </div>
       </header>
 
-      {/* Mobile Navbar */}
       <nav className="md:hidden bg-white px-4 py-3 flex items-center gap-3 border-b border-gray-100 sticky top-0 z-50">
         <div className="flex-shrink-0 cursor-pointer" onClick={() => handleViewChange("home")}>
           <h1 className="text-primary font-black text-2xl tracking-tighter">Relo</h1>
@@ -972,7 +995,6 @@ function AppContent() {
         </button>
       </nav>
 
-      {/* Main Content */}
       <main className="flex-1 overflow-y-auto pb-24 md:pb-10 hide-scrollbar">
         <div className="max-w-7xl mx-auto">
           <AnimatePresence mode="wait">
@@ -1012,7 +1034,7 @@ function AppContent() {
             <SellView 
               key="sell"
               onSuccess={() => handleViewChange("home")} 
-              onBack={goBack} // <--- 换成智能返回！
+              onBack={goBack}
               profile={profile}
               showAlert={showAlert}
             />
@@ -1040,7 +1062,6 @@ function AppContent() {
               }}
               setIsDirty={setIsDirty}
               showConfirm={showConfirm}
-              // NEW PERSISTENT STATES
               addresses={addresses}
               setAddresses={setAddresses}
               defaultAddrIndex={defaultAddrIndex}
@@ -1085,24 +1106,18 @@ function AppContent() {
               onBack={goBack}
               onStatusChange={async (id, status) => {
                 try {
+                  await updateProductStatusSafely(selectedProduct, status);
                   const updates: any = { status };
-                  if (status === "Completed") {
-                    updates.completedAt = new Date().toISOString();
-                    // Increment seller's sales count
-                    await updateDoc(doc(db, "users", selectedProduct.sellerId), {
-                      salesCount: increment(1)
-                    });
-                    // Increment buyer's purchases count if exists
-                    if (selectedProduct.buyerId) {
-                      await updateDoc(doc(db, "users", selectedProduct.buyerId), {
-                        purchasesCount: increment(1)
-                      });
-                    }
+                  if (status === "Completed") updates.completedAt = new Date().toISOString();
+                  if (status === "Delivered") updates.deliveredAt = new Date().toISOString();
+                  if (status === "Still on") {
+                    updates.buyerId = "";
+                    updates.buyerName = "";
+                    updates.deliveredAt = "";
+                    updates.completedAt = "";
                   }
-                  await updateDoc(doc(db, "products", id), updates);
                   setSelectedProduct(prev => prev ? { ...prev, ...updates } : null);
                   
-                  // Immediate UI Sync for Shop Stats
                   if (status === "Sold" || status === "Completed") {
                     const el = document.getElementById('shop-stat-sold');
                     if (el) {
@@ -1125,9 +1140,7 @@ function AppContent() {
                   type: "danger",
                   onConfirm: async () => {
                     try {
-                      console.log("Deleting product:", id);
                       await deleteDoc(doc(db, "products", id));
-                      console.log("Product deleted successfully");
                       setSelectedProduct(null);
                       handleViewChange("home");
                     } catch (error) {
@@ -1230,7 +1243,6 @@ function AppContent() {
         </div>
       </main>
 
-      {/* Sell Options Overlay (Mobile) */}
       <AnimatePresence>
         {showSellOptions && (
           <>
@@ -1273,7 +1285,6 @@ function AppContent() {
         )}
       </AnimatePresence>
 
-      {/* Bottom Nav (Mobile Only) */}
       <div className="fixed bottom-0 left-0 right-0 bg-white border-t border-gray-100 px-6 py-3 flex justify-between items-center z-50 md:hidden">
         <NavButton 
           icon={view === "home" ? Settings : Home} 
@@ -1304,7 +1315,6 @@ function AppContent() {
         />
       </div>
 
-      {/* Custom Modal */}
       <ConfirmationModal 
         isOpen={modalConfig.isOpen}
         title={modalConfig.title}
@@ -1319,7 +1329,6 @@ function AppContent() {
         onCancel={() => setModalConfig(prev => ({ ...prev, isOpen: false }))}
       />
 
-      {/* Success Modal */}
       <AnimatePresence>
         {showSuccessModal && (
           <div className="fixed inset-0 z-[100] flex items-center justify-center p-4">
@@ -1481,7 +1490,6 @@ function HomeView({
       exit={{ opacity: 0 }}
       className="p-4"
     >
-      {/* Categories */}
       <div className="flex gap-2 overflow-x-auto pb-4 mb-4 -mx-4 px-4 cursor-grab active:cursor-grabbing scroll-smooth">
         {CATEGORIES.map(cat => (
           <button
@@ -1499,7 +1507,6 @@ function HomeView({
         ))}
       </div>
 
-      {/* Product Grid */}
       <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6 gap-4">
         {products.length > 0 ? (
           products.map(product => (
@@ -1553,7 +1560,6 @@ function ProductCard({ product, users, onClick, isFavorite, onToggleFavorite, on
         )}
       </div>
       
-      {/* Favorite Button */}
       <button 
         onClick={(e) => {
           e.stopPropagation();
@@ -1616,85 +1622,56 @@ function SellView({ onSuccess, onBack, profile, showAlert }: SellViewProps) {
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    console.log("Submit button clicked!");
     
     if (!profile) {
-      console.error("Submit failed: No profile found", { user: auth.currentUser?.uid });
       return;
     }
     
     if (images.length === 0) {
-      console.warn("Submit failed: No images uploaded");
       return showAlert("Missing Photos", "Please upload at least one image of your item.");
     }
 
-    console.log("Form data:", formData);
-    console.log("Number of images:", images.length);
-
     setUploading(true);
     try {
-      console.log("Starting image processing...");
-      
+      // FIX 4: 移除了人为阻断的 8 秒超时和危险的 Base64 退避逻辑。
+      // 让 Firebase Storage SDK 自己的断点续传机制接管，如果真上传失败会被直接 catch 到。
       const imageUrls = await Promise.all(
         images.map(async (file) => {
           const storageRef = ref(storage, `products/${Date.now()}_${file.name}`);
-          try {
-            console.log(`Attempting Storage upload for ${file.name}...`);
-            // Set a manual timeout for the upload attempt
-            const uploadPromise = uploadBytes(storageRef, file);
-            const timeoutPromise = new Promise((_, reject) => 
-              setTimeout(() => reject(new Error("Upload timeout")), 8000)
-            );
-            
-            await Promise.race([uploadPromise, timeoutPromise]);
-            const url = await getDownloadURL(storageRef);
-            console.log(`Storage upload success: ${url}`);
-            return url;
-          } catch (err) {
-            console.warn(`Storage upload failed for ${file.name}, falling back to Base64:`, err);
-            const base64 = await compressImage(file);
-            console.log(`Base64 fallback successful for ${file.name}`);
-            return base64;
-          }
+          console.log(`Attempting Storage upload for ${file.name}...`);
+          await uploadBytes(storageRef, file);
+          const url = await getDownloadURL(storageRef);
+          console.log(`Storage upload success: ${url}`);
+          return url;
         })
       );
 
-    const priceNum = parseFloat(formData.price);
-    if (isNaN(priceNum)) {
-      console.error("Submit failed: Invalid price", formData.price);
-      setUploading(false);
-      return showAlert("Invalid Price", "Please enter a valid number for the price.");
-    }
+      const priceNum = parseFloat(formData.price);
+      if (isNaN(priceNum)) {
+        setUploading(false);
+        return showAlert("Invalid Price", "Please enter a valid number for the price.");
+      }
 
-    const productPayload = {
-      ...formData,
-      price: priceNum,
-      images: imageUrls,
-      sellerId: profile.uid,
-      sellerName: profile.displayName,
-      sellerAvatar: profile.photoURL,
-      sellerIsStudent: profile.isStudent,
-      sellerSalesCount: profile.salesCount || 0,
-      sellerPurchasesCount: profile.purchasesCount || 0,
-      dormLocation: profile.dormLocation || "Cornell Tech House",
-      status: "Still on",
-      createdAt: new Date().toISOString()
-    };
+      const productPayload = {
+        ...formData,
+        price: priceNum,
+        images: imageUrls,
+        sellerId: profile.uid,
+        sellerName: profile.displayName,
+        sellerAvatar: profile.photoURL,
+        sellerIsStudent: profile.isStudent,
+        sellerSalesCount: profile.salesCount || 0,
+        sellerPurchasesCount: profile.purchasesCount || 0,
+        dormLocation: profile.dormLocation || "Cornell Tech House",
+        status: "Still on",
+        createdAt: new Date().toISOString()
+      };
 
-    console.log("Final product payload:", productPayload);
-
-    try {
-      console.log("Saving product to Firestore...");
       await addDoc(collection(db, "products"), productPayload);
-      console.log("Product saved successfully!");
       onSuccess();
     } catch (error: any) {
-      console.error("Firestore addDoc failed:", error);
-      throw error; // Let the outer catch handle it
-    }
-  } catch (error: any) {
       console.error("Publishing failed:", error);
-      let msg = "Failed to post item. Please try again.";
+      let msg = "Failed to post item. Please check your network and try again.";
       if (error?.message?.includes("permission-denied")) {
         msg = "Permission denied. Please check your login status.";
       }
@@ -1722,7 +1699,6 @@ function SellView({ onSuccess, onBack, profile, showAlert }: SellViewProps) {
         </button>
       </div>
       <form onSubmit={handleSubmit} className="space-y-5">
-        {/* Image Upload */}
         <div className="space-y-2">
           <label className="text-sm font-bold text-gray-600">Photos</label>
           <div className="flex gap-2 overflow-x-auto pb-2">
@@ -1757,7 +1733,6 @@ function SellView({ onSuccess, onBack, profile, showAlert }: SellViewProps) {
               const files = e.target.files;
               if (files) {
                 const newFiles: File[] = Array.from(files);
-                console.log("Files selected:", newFiles.map(f => f.name));
                 setImages(prev => [...prev, ...newFiles]);
               }
             }}
@@ -1921,7 +1896,6 @@ function ProductDetailView({
       exit={{ opacity: 0, y: 20 }}
       className="bg-white min-h-full relative"
     >
-      {/* Header */}
       <div className="sticky top-0 z-30 bg-white border-b border-gray-100 px-4 py-3 flex items-center justify-between">
         <button onClick={onBack} className="p-2 -ml-2 text-gray-600 hover:bg-gray-100 rounded-full transition-colors">
           <ChevronLeft className="w-6 h-6" />
@@ -1958,7 +1932,6 @@ function ProductDetailView({
       </div>
 
       <div className="grid grid-cols-1 md:grid-cols-2 gap-0 md:gap-8 pt-2">
-        {/* Image Gallery */}
         <div className="aspect-square bg-gray-100 relative md:rounded-2xl md:overflow-hidden md:m-6">
           {product.images?.[activeImage] ? (
             <img src={product.images[activeImage]} className="w-full h-full object-cover" alt={product.title} />
@@ -1968,7 +1941,6 @@ function ProductDetailView({
             </div>
           )}
           
-          {/* Thumbnails */}
           {product.images?.length > 1 && (
             <div className="absolute bottom-4 left-0 right-0 flex justify-center gap-2">
               {product.images.map((_, i) => (
@@ -1985,7 +1957,6 @@ function ProductDetailView({
           )}
         </div>
 
-        {/* Content */}
         <div className="p-6 space-y-6 pb-32 md:pb-6">
         {isEditing ? (
           <div className="space-y-4 animate-in fade-in slide-in-from-top-2">
@@ -2092,7 +2063,6 @@ function ProductDetailView({
 
         <hr className="border-gray-100" />
 
-        {/* Seller Info */}
         <div 
           onClick={() => onViewSellerShop(product.sellerId)}
           className="flex items-center justify-between cursor-pointer hover:bg-gray-50 p-2 -m-2 rounded-2xl transition-colors"
@@ -2326,7 +2296,6 @@ function ManageOrdersView({
   const [tab, setTab] = useState<"purchases" | "sales">("purchases");
   const [assigningId, setAssigningId] = useState<string | null>(null);
 
-  // Only show items where user is explicitly the buyer
   const myPurchases = products.filter(p => p.buyerId === currentUser?.uid);
   const mySales = products.filter(p => p.sellerId === currentUser?.uid && p.status !== "Still on");
 
@@ -2341,41 +2310,60 @@ function ManageOrdersView({
 
   const handleStatusUpdate = async (product: Product, newStatus: Product["status"]) => {
     try {
-      const updates: Partial<Product> = { status: newStatus };
-      if (newStatus === "Delivered") {
-        updates.deliveredAt = new Date().toISOString();
-        if (product.buyerId) {
-          await onSendSystemMessage(
-            product.id, 
-            product.sellerId, 
-            product.buyerId, 
-            `The seller has delivered your item "${product.title}". Please check it.`
-          );
+      if (!currentUser) throw new Error("You must be logged in.");
+
+      await runTransaction(db, async (transaction) => {
+        const productRef = doc(db, "products", product.id);
+        const productSnap = await transaction.get(productRef);
+
+        if (!productSnap.exists()) {
+          throw new Error("Product not found.");
         }
-      }
-      if (newStatus === "Completed") {
-        updates.completedAt = new Date().toISOString();
-        // Increment seller's sales count
-        await updateDoc(doc(db, "users", product.sellerId), {
-          salesCount: increment(1)
-        });
-        // Increment buyer's purchases count if exists
-        if (product.buyerId) {
-          await updateDoc(doc(db, "users", product.buyerId), {
-            purchasesCount: increment(1)
-          });
+
+        const latest = { id: product.id, ...productSnap.data() } as Product;
+        const updates: Partial<Product> = {};
+
+        if (newStatus === "Delivered") {
+          if (latest.status !== "Pending" || latest.sellerId !== currentUser.uid) {
+            throw new Error("Only the seller can mark a pending order as delivered.");
+          }
+          updates.status = "Delivered";
+          updates.deliveredAt = new Date().toISOString();
+        } else if (newStatus === "Completed") {
+          if (latest.status !== "Delivered" || latest.buyerId !== currentUser.uid) {
+            throw new Error("Only the buyer can complete a delivered order.");
+          }
+          updates.status = "Completed";
+          updates.completedAt = new Date().toISOString();
+        } else if (newStatus === "Still on") {
+          if (!["Pending", "Delivered"].includes(latest.status) || latest.sellerId !== currentUser.uid) {
+            throw new Error("Only the seller can cancel this transaction.");
+          }
+          updates.status = "Still on";
+          updates.buyerId = "";
+          updates.buyerName = "";
+          updates.deliveredAt = "";
+          updates.completedAt = "";
+        } else {
+          throw new Error("Unsupported status transition.");
         }
+
+        transaction.update(productRef, updates as any);
+      });
+
+      if (newStatus === "Delivered" && product.buyerId) {
+        await onSendSystemMessage(
+          product.id,
+          product.sellerId,
+          product.buyerId,
+          `The seller has delivered your item "${product.title}". Please check it.`
+        );
       }
-      if (newStatus === "Still on") {
-        updates.buyerId = "";
-        updates.buyerName = "";
-      }
-      
-      await updateDoc(doc(db, "products", product.id), updates);
+
       showAlert("Success", `Order status updated to ${newStatus}`);
-    } catch (error) {
+    } catch (error: any) {
       console.error("Update failed:", error);
-      showAlert("Error", "Failed to update order status.");
+      showAlert("Error", error?.message || "Failed to update order status.");
     }
   };
 
@@ -2384,16 +2372,7 @@ function ManageOrdersView({
       await updateDoc(doc(db, "products", productId), { 
         buyerId, 
         buyerName,
-        status: "Completed" // Legacy items are usually already completed
-      });
-      
-      // Increment seller's sales count
-      await updateDoc(doc(db, "users", sellerId), {
-        salesCount: increment(1)
-      });
-      // Increment buyer's purchases count
-      await updateDoc(doc(db, "users", buyerId), {
-        purchasesCount: increment(1)
+        status: "Completed"
       });
 
       setAssigningId(null);
@@ -2563,7 +2542,6 @@ function ManageOrdersView({
                                 .filter(room => room.productId === product.id)
                                 .map(room => {
                                   const otherParticipantId = room.participants.find(id => id !== currentUser?.uid);
-                                  // We don't have the other person's name here easily, so we use a placeholder or generic label
                                   return (
                                     <button
                                       key={room.id}
@@ -2658,13 +2636,8 @@ function SellerShopView({ sellerProfile, products, onSelectProduct, onBack, isOw
   const activeProducts = products.filter(p => p.status === "Still on");
   const soldProducts = products.filter(p => p.status === "Sold" || p.status === "Completed");
 
-  // PART 1: THE SYNCHRONIZATION FUNCTION
   const syncShopStats = useCallback(() => {
-    console.log("Syncing shop stats...");
-    // Determine actual number of sold items from the products prop
     const soldCount = products.filter(p => p.status === "Sold" || p.status === "Completed").length;
-    
-    // Locate the DOM element for the Items Sold stat
     const el = document.getElementById('shop-stat-sold');
     if (el) {
       el.innerText = soldCount.toString();
@@ -2693,7 +2666,6 @@ function SellerShopView({ sellerProfile, products, onSelectProduct, onBack, isOw
       animate={{ opacity: 1, y: 0 }}
       className="min-h-screen bg-white"
     >
-      {/* Header */}
       <div className="relative">
         <div className="h-32 bg-gray-100 overflow-hidden">
           <img 
@@ -2711,7 +2683,6 @@ function SellerShopView({ sellerProfile, products, onSelectProduct, onBack, isOw
       </div>
 
       <div className="px-6 -mt-10 relative z-10">
-        {/* Avatar Section */}
         <div className="flex items-end mb-6">
           <div className="w-24 h-24 rounded-full border-4 border-white overflow-hidden shadow-lg bg-white">
             <img 
@@ -2722,9 +2693,7 @@ function SellerShopView({ sellerProfile, products, onSelectProduct, onBack, isOw
           </div>
         </div>
 
-        {/* Main Info Area */}
         <div className="shop-profile-container">
-          {/* Left Side: Identity, Education & Urgency */}
           <div className="shop-left-side">
             <div className="flex items-center gap-2 mb-1">
               <h2 className="text-2xl font-bold text-gray-900">{sellerProfile?.displayName}</h2>
@@ -2768,7 +2737,6 @@ function SellerShopView({ sellerProfile, products, onSelectProduct, onBack, isOw
             )}
           </div>
 
-          {/* Right Side: Trust Metrics */}
           <div className="shop-right-side">
             <div className="stats-row mb-6">
               <div className="stat-item">
@@ -2803,7 +2771,6 @@ function SellerShopView({ sellerProfile, products, onSelectProduct, onBack, isOw
           </div>
         </div>
 
-        {/* Tabs */}
         <div className="flex gap-8 border-b border-gray-100 mb-6">
           <button 
             onClick={() => setTab("active")}
@@ -2831,29 +2798,22 @@ function SellerShopView({ sellerProfile, products, onSelectProduct, onBack, isOw
           </button>
         </div>
 
-        {/* PART 1: THE PRODUCT GRID CONTAINER */}
         <div className="shop-product-grid">
           {(tab === "active" ? activeProducts : soldProducts).map(product => (
-            /* PART 1: THE PRODUCT CARD LAYOUT REFINEMENT */
             <div 
               key={product.id}
               onClick={() => onSelectProduct(product)}
               className="shop-product-card"
             >
-              {/* Image Block (Top) - 1:1 square aspect ratio */}
               <div className="card-image-wrapper">
                 <img src={product.images[0]} alt={product.title} />
                 
-                {/* PART 2: TOP-CORNER OVERLAYS */}
-                {/* Top-Left Corner (Condition) */}
                 <span className="condition-tag">
                   {product.condition.toLowerCase().includes("brand new") ? "New" : 
                    product.condition.toLowerCase().includes("like new") ? "Like New" : 
                    "Used"}
                 </span>
 
-                {/* Top-Right Corner (Favorites Heart) - PART 4: Contextual Logic */}
-                {/* Logic: if (currentUser.id === shopUser.id) { hide heart } */}
                 {!isOwnShop && (
                   <div className="heart-icon-wrapper">
                     <Heart className="w-4 h-4" />
@@ -2869,12 +2829,8 @@ function SellerShopView({ sellerProfile, products, onSelectProduct, onBack, isOw
                 )}
               </div>
               
-              {/* PART 3: THE TEXT BLOCK (Formatting Below Image) */}
               <div className="card-info">
-                {/* 1. Title (Top of text block): Medium dark text, font-weight: 600, 2 lines max */}
                 <h4 className="product-title">{product.title}</h4>
-                
-                {/* 2. Price (Below Title): Large, bold text colored with var(--primary-color) */}
                 <span className="price-tag">${product.price}</span>
               </div>
             </div>
@@ -2920,7 +2876,6 @@ function ProfileView({
   const [showEditModal, setShowEditModal] = useState(false);
   const [uploading, setUploading] = useState(false);
 
-  // Array states (Max 3) and Index Trackers (-1 = new, null = list mode, >=0 = editing)
   const [editingAddrIndex, setEditingAddrIndex] = useState<number | null>(null);
   const [draftAddress, setDraftAddress] = useState({ street: "", city: "", zip: "" });
 
@@ -2933,7 +2888,6 @@ function ProfileView({
     }
   }, [editingAddrIndex, editingPayIndex, showEditModal, setIsDirty]);
 
-  // Wishlist state (manual list)
   const [wishlist, setWishlist] = useState<string[]>([]);
   const [newWishlistItem, setNewWishlistItem] = useState("");
 
@@ -2944,7 +2898,6 @@ function ProfileView({
     }
   };
 
-  // Edit Profile Form State
   const [editForm, setEditForm] = useState({
     displayName: profile?.displayName || "",
     school: profile?.school || "Cornell Tech",
@@ -2953,7 +2906,6 @@ function ProfileView({
     departureDate: profile?.departureDate || "May 2026"
   });
 
-  // Sync editForm when profile or modal visibility changes
   useEffect(() => {
     if (showEditModal && profile) {
       setEditForm({
@@ -2972,8 +2924,10 @@ function ProfileView({
 
     try {
       setUploading(true);
-      const base64 = await compressImage(file, 400, 400, 0.6);
-      await onUpdateProfile({ photoURL: base64 });
+      const avatarRef = ref(storage, `avatars/${profile.uid}/${Date.now()}_${file.name}`);
+      await uploadBytes(avatarRef, file);
+      const url = await getDownloadURL(avatarRef);
+      await onUpdateProfile({ photoURL: url });
     } catch (error) {
       console.error("Error uploading avatar:", error);
     } finally {
@@ -2988,7 +2942,6 @@ function ProfileView({
 
   const campusTransactions = (profile?.salesCount || 0) + (profile?.purchasesCount || 0);
 
-  // Sub-view: Manage My Orders
   if (activeSubView === "orders") {
     const mySales = products.filter(p => p.sellerId === profile?.uid);
     const myPurchases = products.filter(p => p.buyerId === profile?.uid);
@@ -3046,7 +2999,6 @@ function ProfileView({
     );
   }
 
-  // Sub-view: My Wishlist
   if (activeSubView === "wishlist") {
     return (
       <motion.div 
@@ -3107,7 +3059,6 @@ function ProfileView({
     );
   }
 
-  // Sub-view: Favorites
   if (activeSubView === "favorites") {
     const favoriteProducts = products.filter(p => favorites.includes(p.id));
     return (
@@ -3196,7 +3147,6 @@ function ProfileView({
                     setEditingAddrIndex(null);
                     if (setIsDirty) setIsDirty(false);
                     
-                    // If it's the primary address, sync to profile (which triggers modal). Otherwise, trigger modal manually.
                     if (newArr.length === 1 || defaultAddrIndex === editingAddrIndex) {
                       onUpdateProfile({ dormLocation: draftAddress.city }); 
                     } else {
@@ -3219,7 +3169,6 @@ function ProfileView({
                 <>
                   {addresses.map((addr, idx) => (
                     <div key={idx} className={cn("card p-6 relative border-2 transition-all", defaultAddrIndex === idx ? "border-primary bg-primary/5" : "border-transparent")}>
-                        {/* ABSOLUTE TRASH ICON */}
                         <button 
                           onClick={() => {
                             const newArr = addresses.filter((_, i) => i !== idx);
@@ -3234,7 +3183,6 @@ function ProfileView({
                         </button>
 
                         <div className="flex items-start gap-4">
-                          {/* SILENT UPDATE ON CLICK */}
                           <div className={cn("w-6 h-6 rounded-full border-2 flex items-center justify-center cursor-pointer mt-1", defaultAddrIndex === idx ? "border-primary" : "border-gray-300")} 
                                onClick={() => { setDefaultAddrIndex(idx); onUpdateProfile({ dormLocation: addr.city }, true); }}>
                             {defaultAddrIndex === idx && <div className="w-3 h-3 bg-primary rounded-full" />}
@@ -3299,7 +3247,6 @@ function ProfileView({
                     if (setIsDirty) setIsDirty(false);
                     if (newArr.length === 1) setDefaultPayIndex(0);
                     
-                    // Always trigger success modal when manually saving a card
                     if (setShowSuccessModal) setShowSuccessModal(true);
                   }}
                   className="btn-primary flex-1 py-4 disabled:opacity-40 disabled:cursor-default disabled:active:scale-100 disabled:hover:bg-primary transition-all"
@@ -3318,7 +3265,6 @@ function ProfileView({
                 <>
                   {payments.map((pay, idx) => (
                     <div key={idx} className={cn("card p-6 relative border-2 transition-all", defaultPayIndex === idx ? "border-primary bg-primary/5" : "border-transparent")}>
-                        {/* ABSOLUTE TRASH ICON */}
                         <button 
                           onClick={() => {
                             const newArr = payments.filter((_, i) => i !== idx);
@@ -3368,13 +3314,11 @@ function ProfileView({
       className="min-h-screen bg-bg-light"
       id="profileView"
     >
-      {/* Sticky Header */}
       <header className="sticky top-0 z-40 bg-white border-b border-gray-100 px-6 py-4 flex items-center justify-center">
         <h1 className="text-lg font-bold text-text-dark">My Profile</h1>
       </header>
 
       <div className="max-w-[650px] mx-auto px-4 py-6 space-y-6">
-        {/* Profile Identity Card */}
         <div className="card p-6 flex items-center gap-5 relative">
           <div className="relative group">
             <div className="w-20 h-20 rounded-full overflow-hidden bg-primary flex items-center justify-center border-4 border-white shadow-sm">
@@ -3427,7 +3371,6 @@ function ProfileView({
           </div>
         </div>
 
-        {/* Manage My Orders Banner */}
         <button 
           onClick={() => setActiveSubView("orders")}
           className="w-full bg-primary p-6 rounded-3xl flex items-center justify-between group hover:bg-primary-hover transition-all shadow-lg shadow-primary/20"
@@ -3441,7 +3384,6 @@ function ProfileView({
           </div>
         </button>
 
-        {/* Relocation & Trust Metrics Row */}
         <div className="flex gap-4">
           <div className="card flex-1 p-4 flex flex-col items-start">
             <span className="text-[10px] font-bold text-gray-400 uppercase tracking-widest mb-1">Departure Date</span>
@@ -3453,7 +3395,6 @@ function ProfileView({
           </div>
         </div>
 
-        {/* Action Menu Cards */}
         <div className="card divide-y divide-gray-50 overflow-hidden">
           <button 
             onClick={() => setActiveSubView("wishlist")}
@@ -3505,7 +3446,6 @@ function ProfileView({
           </button>
         </div>
 
-        {/* Verification Notification */}
         {!profile?.isStudent && (
           <div className="bg-orange-50 border border-orange-100 p-4 rounded-2xl flex items-start gap-3">
             <div className="w-8 h-8 rounded-full bg-white flex items-center justify-center text-primary shadow-sm shrink-0">
@@ -3519,7 +3459,6 @@ function ProfileView({
           </div>
         )}
 
-        {/* Logout Button */}
         <button 
           onClick={() => setShowLogoutModal(true)}
           className="w-full py-4 bg-red-50 text-red-500 rounded-2xl font-bold text-sm hover:bg-red-100 transition-colors flex items-center justify-center gap-2"
@@ -3529,7 +3468,6 @@ function ProfileView({
         </button>
       </div>
 
-      {/* Edit Profile Modal */}
       <AnimatePresence>
         {showEditModal && (
           <div className="fixed inset-0 z-[100] flex items-center justify-center p-4">
@@ -3622,7 +3560,6 @@ function ProfileView({
         )}
       </AnimatePresence>
 
-      {/* Logout Modal */}
       <AnimatePresence>
         {showLogoutModal && (
           <div className="fixed inset-0 z-[100] flex items-center justify-center p-4">
@@ -3695,11 +3632,9 @@ function UnifiedMessagesView({
   return (
     <div className="max-w-[1200px] mx-auto px-4 py-6 h-[calc(100vh-80px)] messages-split-container">
       <div className="bg-white rounded-[32px] shadow-xl border border-black/5 flex flex-row h-full overflow-hidden">
-        {/* Left Pane: Chat List */}
         <div className="w-[30%] min-w-[300px] border-r border-[#eee] flex flex-col bg-white">
           <div className="p-4 border-b border-gray-50 space-y-4">
             <h2 className="text-xl font-black text-gray-900">Messages</h2>
-            {/* NEW FILTER TABS */}
             <div className="flex bg-gray-100 p-1 rounded-xl">
               {(["all", "buying", "selling"] as const).map(f => (
                 <button
@@ -3730,7 +3665,6 @@ function UnifiedMessagesView({
                 const otherUserAvatar = otherUser?.photoURL || `https://api.dicebear.com/7.x/avataaars/svg?seed=${otherParticipantId}`;
                 const isActive = selectedRoom?.id === room.id;
                 
-                // Determine Identity
                 const isSeller = products.find(p => p.id === room.productId)?.sellerId === currentUser.uid;
 
                 return (
@@ -3752,7 +3686,6 @@ function UnifiedMessagesView({
                           <span className="w-2 h-2 bg-primary rounded-full flex-shrink-0" />
                         )}
                       </div>
-                      {/* IDENTITY BADGE & PRODUCT TITLE */}
                       <div className="flex items-center gap-1.5 mb-1">
                         <span className={cn(
                           "text-[8px] font-black uppercase px-1.5 py-0.5 rounded-sm tracking-wider",
@@ -3775,7 +3708,6 @@ function UnifiedMessagesView({
           </div>
         </div>
 
-        {/* Right Pane: Active Chat */}
         <div className="flex-1 flex flex-col bg-gray-50/30">
           {selectedRoom ? (
             <ActiveChatPane 
@@ -3887,7 +3819,6 @@ function ActiveChatPane({
 
   return (
     <div className="flex flex-col h-full relative">
-      {/* Header */}
       <div className="px-6 py-4 flex items-center justify-between border-b border-gray-100 bg-white">
         <div className="flex items-center gap-3">
           <div className="w-10 h-10 rounded-full overflow-hidden bg-gray-100">
@@ -3906,7 +3837,6 @@ function ActiveChatPane({
         </button>
       </div>
 
-      {/* Product Context Card */}
       {product && (
         <div className="px-6 py-3 bg-white border-b border-gray-100 flex items-center gap-4">
           <div className="w-12 h-12 rounded-xl overflow-hidden bg-gray-100 flex-shrink-0 border border-black/5">
@@ -3925,7 +3855,6 @@ function ActiveChatPane({
         </div>
       )}
 
-      {/* Chat History Area */}
       <div 
         ref={scrollRef}
         className="flex-1 overflow-y-auto p-6 space-y-4"
@@ -3966,7 +3895,6 @@ function ActiveChatPane({
         })}
       </div>
 
-      {/* Bottom Input Area */}
       <div className="p-6 bg-white border-t border-gray-100">
         <form onSubmit={handleSend} className="flex gap-3 items-center">
           <input 
@@ -4086,7 +4014,6 @@ function ChatRoomView({
 
   const product = products.find(p => p.id === room.productId);
 
-  // Clear unread status when room is opened
   useEffect(() => {
     if (room.unreadBy?.includes(currentUser.uid)) {
       const newUnreadBy = room.unreadBy.filter(id => id !== currentUser.uid);
@@ -4127,7 +4054,6 @@ function ChatRoomView({
       };
       await addDoc(collection(db, "chatRooms", room.id, "messages"), msgData);
       
-      // Update room with last message and notify other participants
       const otherParticipants = room.participants.filter(id => id !== currentUser.uid);
       await updateDoc(doc(db, "chatRooms", room.id), {
         lastMessage: newMessage.trim(),
@@ -4149,7 +4075,6 @@ function ChatRoomView({
       exit={{ opacity: 0, x: 20 }}
       className="flex flex-col h-full bg-white"
     >
-      {/* Header */}
       <div className="px-4 py-3 flex items-center gap-3 border-b border-gray-100 bg-white sticky top-0 z-40">
         <button onClick={onBack} className="p-2 -ml-2 text-gray-600">
           <ChevronLeft className="w-6 h-6" />
@@ -4166,7 +4091,6 @@ function ChatRoomView({
         </div>
       </div>
 
-      {/* Product Context Card */}
       {product && (
         <div className="px-4 py-3 bg-white border-b border-gray-100 shadow-sm flex items-center gap-3 sticky top-[61px] z-30">
           <div className="w-12 h-12 rounded-lg overflow-hidden bg-gray-100 flex-shrink-0">
@@ -4185,7 +4109,6 @@ function ChatRoomView({
         </div>
       )}
 
-      {/* Messages */}
       <div 
         ref={scrollRef}
         className="flex-1 overflow-y-auto p-4 space-y-6 bg-gray-50/50 pb-24"
@@ -4254,7 +4177,6 @@ function ChatRoomView({
         })}
       </div>
 
-      {/* Input */}
       <div className="fixed bottom-0 left-0 right-0 p-4 bg-white border-t border-gray-100 z-40 max-w-[650px] mx-auto">
         <form onSubmit={handleSend} className="flex gap-2 items-center">
           <input 
@@ -4294,182 +4216,3 @@ function FavoritesView({
   onViewSellerShop: (sellerId: string) => void
 }) {
   return (
-    <motion.div 
-      initial={{ opacity: 0, y: 20 }}
-      animate={{ opacity: 1, y: 0 }}
-      exit={{ opacity: 0, y: 20 }}
-      className="p-6"
-    >
-      <h2 className="text-2xl font-black mb-6">Favorites</h2>
-      {products.length > 0 ? (
-        <div className="grid grid-cols-2 gap-4">
-          {products.map(product => (
-            <ProductCard 
-              key={product.id} 
-              product={product} 
-              users={users}
-              onClick={() => onSelectProduct(product)}
-              isFavorite={favorites.includes(product.id)}
-              onToggleFavorite={onToggleFavorite}
-              onViewSellerShop={onViewSellerShop}
-            />
-          ))}
-        </div>
-      ) : (
-        <div className="flex flex-col items-center justify-center py-20 text-center">
-          <div className="w-16 h-16 bg-gray-100 rounded-2xl flex items-center justify-center text-gray-300 mb-4">
-            <HeartIcon className="w-8 h-8" />
-          </div>
-          <p className="text-gray-400 text-sm">No favorite items yet.</p>
-        </div>
-      )}
-    </motion.div>
-  );
-}
-
-function SettingsView({ profile, onLogout }: { profile: UserProfile | null, onLogout: () => void }) {
-  const settingsItems = [
-    { icon: Bell, label: "Notifications", color: "text-blue-500", bg: "bg-blue-50" },
-    { icon: Shield, label: "Privacy & Security", color: "text-green-500", bg: "bg-green-50" },
-    { icon: HelpCircle, label: "Help Center", color: "text-purple-500", bg: "bg-purple-50" },
-    { icon: Info, label: "About Relo", color: "text-orange-500", bg: "bg-orange-50" },
-  ];
-
-  return (
-    <motion.div 
-      initial={{ opacity: 0, y: 20 }}
-      animate={{ opacity: 1, y: 0 }}
-      exit={{ opacity: 0, y: 20 }}
-      className="p-6"
-    >
-      <h2 className="text-2xl font-black mb-8">Settings</h2>
-      
-      <div className="space-y-6">
-        <div className="space-y-3">
-          <p className="text-[10px] font-bold text-gray-400 uppercase tracking-widest px-1">Account</p>
-          <div className="bg-white rounded-3xl p-4 flex items-center gap-4 border border-black/5 shadow-sm">
-            <img src={profile?.photoURL || `https://api.dicebear.com/7.x/avataaars/svg?seed=${profile?.uid}`} className="w-12 h-12 rounded-2xl object-cover" alt="profile" />
-            <div className="flex-1">
-              <h4 className="font-bold text-gray-900">{profile?.displayName}</h4>
-              <p className="text-xs text-gray-400">{profile?.email}</p>
-            </div>
-          </div>
-        </div>
-
-        <div className="space-y-3">
-          <p className="text-[10px] font-bold text-gray-400 uppercase tracking-widest px-1">General</p>
-          <div className="bg-white rounded-3xl overflow-hidden border border-black/5 shadow-sm divide-y divide-gray-50">
-            {settingsItems.map((item, i) => (
-              <button key={i} className="w-full p-4 flex items-center justify-between hover:bg-gray-50 transition-all">
-                <div className="flex items-center gap-4">
-                  <div className={cn("w-10 h-10 rounded-xl flex items-center justify-center", item.bg, item.color)}>
-                    <item.icon className="w-5 h-5" />
-                  </div>
-                  <span className="font-bold text-gray-700 text-sm">{item.label}</span>
-                </div>
-                <ChevronLeft className="w-4 h-4 text-gray-300 rotate-180" />
-              </button>
-            ))}
-          </div>
-        </div>
-
-        <button 
-          onClick={onLogout}
-          className="w-full p-4 bg-red-50 text-red-500 rounded-3xl font-bold flex items-center justify-center gap-2 hover:bg-red-100 transition-all mt-4"
-        >
-          <LogOut className="w-5 h-5" />
-          Logout
-        </button>
-      </div>
-    </motion.div>
-  );
-}
-
-function NavButton({ icon: Icon, active, onClick, badgeCount }: { icon: any, active: boolean, onClick: () => void, badgeCount?: number }) {
-  return (
-    <button 
-      onClick={onClick}
-      className={cn(
-        "p-2 transition-all rounded-xl relative",
-        active ? "text-primary bg-primary/5" : "text-gray-400 hover:text-gray-600"
-      )}
-    >
-      <Icon className={cn("w-6 h-6", active && "fill-current")} />
-      {badgeCount !== undefined && badgeCount > 0 && (
-        <span className="absolute -top-1 -right-1 min-w-[18px] h-[18px] bg-red-500 text-white text-[10px] font-bold rounded-full flex items-center justify-center border-2 border-white px-1">
-          {badgeCount > 99 ? "99+" : badgeCount}
-        </span>
-      )}
-    </button>
-  );
-}
-
-function ConfirmationModal({ 
-  isOpen, 
-  title, 
-  message, 
-  onConfirm, 
-  onCancel,
-  confirmText = "Confirm",
-  type = "primary",
-  isAlert = false
-}: { 
-  isOpen: boolean; 
-  title: string; 
-  message: string; 
-  onConfirm: () => void; 
-  onCancel: () => void;
-  confirmText?: string;
-  type?: "danger" | "primary";
-  isAlert?: boolean;
-}) {
-  return (
-    <AnimatePresence>
-      {isOpen && (
-        <div className="fixed inset-0 z-[100] flex items-center justify-center p-6">
-          <motion.div 
-            initial={{ opacity: 0 }}
-            animate={{ opacity: 1 }}
-            exit={{ opacity: 0 }}
-            onClick={onCancel}
-            className="absolute inset-0 bg-black/40 backdrop-blur-sm"
-          />
-          <motion.div 
-            initial={{ opacity: 0, scale: 0.9, y: 20 }}
-            animate={{ opacity: 1, scale: 1, y: 0 }}
-            exit={{ opacity: 0, scale: 0.9, y: 20 }}
-            className="bg-white w-full max-w-xs rounded-3xl p-6 shadow-2xl relative z-10 text-center"
-          >
-            <div className={cn(
-              "w-16 h-16 rounded-2xl mx-auto mb-4 flex items-center justify-center",
-              type === "danger" ? "bg-red-50 text-red-500" : "bg-primary/10 text-primary"
-            )}>
-              <AlertTriangle className="w-8 h-8" />
-            </div>
-            <h3 className="text-xl font-black text-gray-900 mb-2">{title}</h3>
-            <p className="text-gray-500 text-sm leading-relaxed mb-6">{message}</p>
-            <div className="flex flex-col gap-2">
-              <button 
-                onClick={onConfirm}
-                className={cn(
-                  "w-full py-3 rounded-xl font-bold transition-all",
-                  type === "danger" ? "bg-red-500 text-white hover:bg-red-600" : "bg-primary text-white hover:bg-primary-hover"
-                )}
-              >
-                {confirmText}
-              </button>
-              {!isAlert && (
-                <button 
-                  onClick={onCancel}
-                  className="w-full py-3 rounded-xl font-bold text-gray-400 hover:bg-gray-50 transition-all"
-                >
-                  Cancel
-                </button>
-              )}
-            </div>
-          </motion.div>
-        </div>
-      )}
-    </AnimatePresence>
-  );
-}
