@@ -1,0 +1,173 @@
+rules_version = '2';
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+    
+    // ===============================================================
+    // Assumed Data Model
+    // ===============================================================
+    //
+    // Collection: users
+    // Document ID: {userId}
+    // Fields:
+    //   - uid: string (required)
+    //   - displayName: string (required)
+    //   - email: string (required)
+    //   - photoURL: string (optional)
+    //   - isStudent: boolean (optional)
+    //   - dormLocation: string (optional)
+    //   - salesCount: number (optional)
+    //   - purchasesCount: number (optional)
+    //
+    // Collection: products
+    // Document ID: {productId}
+    // Fields:
+    //   - id: string (optional)
+    //   - title: string (required)
+    //   - price: number (required)
+    //   - category: string (required)
+    //   - condition: string (required)
+    //   - description: string (required)
+    //   - images: list (required)
+    //   - sellerId: string (required)
+    //   - sellerName: string (required)
+    //   - sellerAvatar: string (optional)
+    //   - sellerSalesCount: number (optional)
+    //   - sellerPurchasesCount: number (optional)
+    //   - dormLocation: string (required)
+    //   - departureDate: string (required)
+    //   - referenceLink: string (optional)
+    //   - status: string (required, 'Still on' or 'Sold')
+    //   - createdAt: string (required)
+    //
+    // ===============================================================
+
+    // ===============================================================
+    // Helper Functions
+    // ===============================================================
+    
+    function isAuthenticated() {
+      return request.auth != null;
+    }
+    
+    function isAdmin() {
+      return isAuthenticated() &&
+        (get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'admin' ||
+          (request.auth.token.email == "michael20020320@gmail.com" && request.auth.token.email_verified == true));
+    }
+    
+    function isOwner(userId) {
+      return isAuthenticated() && request.auth.uid == userId;
+    }
+    
+    function isDocOwner() {
+      return isAuthenticated() && request.auth.uid == resource.data.sellerId;
+    }
+    
+    function isValidUser(data) {
+      return data.keys().hasAll(['displayName']) &&
+             data.displayName is string && data.displayName.size() > 0 && data.displayName.size() < 100 &&
+             (!('photoURL' in data) || (data.photoURL is string && data.photoURL.size() < 1000)) &&
+             (!('dormLocation' in data) || (data.dormLocation is string && data.dormLocation.size() < 200)) &&
+             (!('salesCount' in data) || data.salesCount is number) &&
+             (!('purchasesCount' in data) || data.purchasesCount is number);
+    }
+
+    function isValidUserPrivate(data) {
+      return data.keys().hasAll(['email']) &&
+             data.email is string && data.email.size() < 100 &&
+             (!('favorites' in data) || (data.favorites is list && data.favorites.size() <= 500)) &&
+             (!('cart' in data) || (data.cart is list && data.cart.size() <= 100));
+    }
+    
+    function isValidProduct(data) {
+      return data.keys().hasAll(['title', 'price', 'category', 'condition', 'description', 'images', 'sellerId', 'sellerName', 'dormLocation', 'departureDate', 'status', 'createdAt']) &&
+             data.title is string && data.title.size() > 0 && data.title.size() < 200 &&
+             data.price is number && data.price >= 0 &&
+             data.category is string &&
+             data.condition is string &&
+             data.description is string && data.description.size() < 2000 &&
+             data.images is list && data.images.size() <= 10 &&
+             data.sellerId is string &&
+             data.sellerName is string &&
+             data.dormLocation is string &&
+             data.departureDate is string &&
+             data.status in ['Still on', 'Pending', 'Delivered', 'Completed', 'Sold'] &&
+             data.createdAt is string &&
+             (!('sellerIsStudent' in data) || data.sellerIsStudent is bool) &&
+             (!('sellerAvatar' in data) || (data.sellerAvatar is string && data.sellerAvatar.size() < 1000)) &&
+             (!('sellerSalesCount' in data) || data.sellerSalesCount is number) &&
+             (!('sellerPurchasesCount' in data) || data.sellerPurchasesCount is number) &&
+             (!('buyerId' in data) || data.buyerId is string) &&
+             (!('buyerName' in data) || data.buyerName is string);
+    }
+
+    function isValidChatRoom(data) {
+      return data.keys().hasAll(['participants', 'productId']) &&
+             data.participants is list && data.participants.size() == 2 &&
+             data.productId is string &&
+             (!('lastMessage' in data) || (data.lastMessage is string && data.lastMessage.size() < 1000)) &&
+             (!('lastMessageAt' in data) || data.lastMessageAt is string) &&
+             (!('productTitle' in data) || data.productTitle is string) &&
+             (!('productImage' in data) || data.productImage is string) &&
+             (!('unreadBy' in data) || data.unreadBy is list);
+    }
+
+    function isValidMessage(data) {
+      return data.keys().hasAll(['senderId', 'text', 'createdAt']) &&
+             data.senderId is string &&
+             data.text is string && data.text.size() > 0 && data.text.size() < 2000 &&
+             data.createdAt is string;
+    }
+
+    // ===============================================================
+    // Rules
+    // ===============================================================
+
+    match /users/{userId} {
+      // Public profile info (no email)
+      allow read: if isAuthenticated();
+      allow create: if isOwner(userId) && isValidUser(request.resource.data);
+      allow update: if isOwner(userId) && isValidUser(request.resource.data);
+    }
+
+    match /users_private/{userId} {
+      // Private info (email, cart, favorites)
+      allow read: if isOwner(userId) || isAdmin();
+      allow create: if isOwner(userId) && isValidUserPrivate(request.resource.data);
+      allow update: if isOwner(userId) && isValidUserPrivate(request.resource.data);
+    }
+    
+    match /products/{productId} {
+      allow read: if true; // Publicly readable for browsing
+      allow create: if isAuthenticated() && 
+                      request.resource.data.sellerId == request.auth.uid && 
+                      isValidProduct(request.resource.data);
+      allow update: if isAuthenticated() && 
+                      (
+                        // Seller can update their own product
+                        isDocOwner() || 
+                        // Buyer can update if they are the assigned buyer
+                        (resource.data.buyerId == request.auth.uid) ||
+                        // Anyone can "buy" if it's still on
+                        (resource.data.status == 'Still on' && request.resource.data.status == 'Pending' && request.resource.data.buyerId == request.auth.uid)
+                      ) &&
+                      isValidProduct(request.resource.data);
+      allow delete: if isDocOwner() && resource.data.status == 'Still on';
+    }
+
+    match /chatRooms/{roomId} {
+      allow read: if isAuthenticated() && request.auth.uid in resource.data.participants;
+      allow create: if isAuthenticated() && request.auth.uid in request.resource.data.participants && isValidChatRoom(request.resource.data);
+      allow update: if isAuthenticated() && request.auth.uid in resource.data.participants && isValidChatRoom(request.resource.data);
+    }
+
+    match /chatRooms/{roomId}/messages/{messageId} {
+      allow read: if isAuthenticated() && request.auth.uid in get(/databases/$(database)/documents/chatRooms/$(roomId)).data.participants;
+      allow create: if isAuthenticated() && 
+                      request.auth.uid in get(/databases/$(database)/documents/chatRooms/$(roomId)).data.participants &&
+                      request.resource.data.senderId == request.auth.uid &&
+                      isValidMessage(request.resource.data);
+    }
+  }
+}

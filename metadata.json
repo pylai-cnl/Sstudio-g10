@@ -1,0 +1,7 @@
+{
+  "name": "Relo",
+  "description": "A fully interactive profile ecosystem prototype for the Relo campus marketplace app, featuring order management, wishlist, and student verification.",
+  "requestFramePermissions": [
+    "camera"
+  ]
+}
