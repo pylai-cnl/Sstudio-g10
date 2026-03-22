@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useMemo } from "react";
 import { 
-  Search, ShoppingCart, PlusCircle, MessageCircle, User, Heart, Settings, Home, CheckCircle 
+  Search, ShoppingCart, PlusCircle, MessageCircle, User, Heart, Settings, Home, CheckCircle, Package
 } from "lucide-react";
 import { motion, AnimatePresence } from "motion/react";
 import { 
