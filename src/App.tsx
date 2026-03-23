@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useMemo } from "react";
 import { 
-  Search, ShoppingCart, PlusCircle, MessageCircle, User, Heart, Settings, Home, CheckCircle, Package
+  Search, ShoppingCart, PlusCircle, MessageCircle, User, Heart, Settings, Home, CheckCircle, Package, Store
 } from "lucide-react";
 import { motion, AnimatePresence } from "motion/react";
 import { 
@@ -31,6 +31,7 @@ import UnifiedMessagesView from "./views/UnifiedMessagesView";
 import FavoritesView from "./views/FavoritesView";
 import SettingsView from "./views/SettingsView";
 import SellerShopView from "./views/SellerShopView";
+import PlatformBuyView from "./views/PlatformBuyView";
 
 // --- Error Handling Logic ---
 export enum OperationType {
@@ -364,6 +365,7 @@ function AppContent() {
                 {showSellOptions && (
                   <motion.div initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: 10 }} className="absolute top-full right-0 mt-2 w-48 bg-white rounded-2xl shadow-2xl border border-black/5 overflow-hidden z-[60]">
                     <button onClick={() => handleViewChange("sell")} className="w-full px-4 py-3 text-left hover:bg-gray-50 flex items-center gap-3"><PlusCircle className="w-5 h-5 text-primary" /><span className="text-sm font-bold">Add Item</span></button>
+                    <button onClick={() => handleViewChange("platform_buy")} className="w-full px-4 py-3 text-left hover:bg-green-50 flex items-center gap-3 border-t border-gray-50"><Store className="w-5 h-5 text-green-500" /><span className="text-sm font-bold">Sell to Relo</span></button>
                     <button onClick={() => handleViewChange("seller_shop")} className="w-full px-4 py-3 text-left hover:bg-gray-50 flex items-center gap-3 border-t border-gray-50"><Package className="w-5 h-5 text-primary" /><span className="text-sm font-bold">My Shop</span></button>
                   </motion.div>
                 )}
@@ -393,6 +395,7 @@ function AppContent() {
             {view === "home" && <HomeView key="home" products={filteredProducts} users={users} selectedCategory={selectedCategory} onSelectCategory={setSelectedCategory} onSelectProduct={(p) => { setSelectedProduct(p); handleViewChange("detail"); }} favorites={profile?.favorites || []} onToggleFavorite={toggleFavorite} onViewSellerShop={(sid) => { setSelectedSellerId(sid); handleViewChange("seller_shop"); }} />}
             {view === "cart" && <CartView key="cart" products={products.filter(p => profile?.cart?.includes(p.id))} onSelectProduct={(p) => { setSelectedProduct(p); handleViewChange("detail"); }} onRemoveFromCart={removeFromCart} onCheckout={checkout} onBack={goBack} />}
             {view === "sell" && <SellView key="sell" onSuccess={() => handleViewChange("home")} onBack={goBack} profile={profile} showAlert={showAlert} />}
+            {view === "platform_buy" && <PlatformBuyView key="platform_buy" onSuccess={() => handleViewChange("home")} onBack={goBack} profile={profile} showAlert={showAlert} />}
             {view === "profile" && <ProfileView key="profile" profile={profile} products={products} users={users} onLogout={handleLogout} onSelectProduct={(p) => { setSelectedProduct(p); handleViewChange("detail"); }} favorites={profile?.favorites || []} onToggleFavorite={toggleFavorite} onManageOrders={() => handleViewChange("orders")} onUpdateProfile={updateProfile} setShowSuccessModal={setShowSuccessModal} showAlert={showAlert} onViewSellerShop={(sid) => { setSelectedSellerId(sid); handleViewChange("seller_shop"); }} setIsDirty={setIsDirty} showConfirm={showConfirm} addresses={addresses} setAddresses={setAddresses} defaultAddrIndex={defaultAddrIndex} setDefaultAddrIndex={setDefaultAddrIndex} payments={payments} setPayments={setPayments} defaultPayIndex={defaultPayIndex} setDefaultPayIndex={setDefaultPayIndex} />}
             {view === "orders" && <ManageOrdersView key="orders" products={products} users={users} chatRooms={chatRooms} currentUser={user} onBack={goBack} onSelectProduct={(p) => { setSelectedProduct(p); handleViewChange("detail"); }} showAlert={showAlert} onSendSystemMessage={sendSystemMessage} onViewSellerShop={(sid) => { setSelectedSellerId(sid); handleViewChange("seller_shop"); }} />}
             {view === "detail" && selectedProduct && <ProductDetailView key={`detail-${selectedProduct.id}`} product={selectedProduct} users={users} currentUser={user} sellerTransactionCount={products.filter(p => p.sellerId === selectedProduct.sellerId && (p.status === "Completed" || p.status === "Sold")).length} onViewSellerShop={(sid) => { setSelectedSellerId(sid); handleViewChange("seller_shop"); }} onBack={goBack} onStatusChange={async (id, status) => { try { await updateProductStatusSafely(selectedProduct, status); setSelectedProduct(prev => prev ? { ...prev, status } : null); showAlert("Success", `Status updated to ${status}`); } catch (error) { showAlert("Error", "Update failed."); } }} onDelete={async (id) => { showConfirm({ title: "Delete?", message: "Cannot be undone.", type: "danger", onConfirm: async () => { await deleteDoc(doc(db, "products", id)); setSelectedProduct(null); handleViewChange("home"); }}); }} onUpdate={async (id, data) => { await updateDoc(doc(db, "products", id), data); setSelectedProduct(prev => prev ? { ...prev, ...data } : null); }} onContactSeller={(p) => { if (p.sellerId !== user.uid) { const existing = chatRooms.find(r => r.productId === p.id && r.participants.includes(user.uid) && r.participants.includes(p.sellerId)); if (existing) { setSelectedChatRoom(existing); handleViewChange("chat_room"); } else { addDoc(collection(db, "chatRooms"), { participants: [user.uid, p.sellerId], productId: p.id, productTitle: p.title, productImage: p.images?.[0] || "", lastMessage: "Chat started", lastMessageAt: new Date().toISOString(), unreadBy: [p.sellerId] }).then(ref => { setSelectedChatRoom({ id: ref.id, participants: [user.uid, p.sellerId], productId: p.id, productTitle: p.title, productImage: p.images?.[0] || "" }); handleViewChange("chat_room"); }); } } else showAlert("Error", "Can't chat with yourself"); }} onAddToCart={(p) => addToCart(p.id)} isOwner={selectedProduct.sellerId === user.uid} showAlert={showAlert} isFavorite={profile?.favorites?.includes(selectedProduct.id) || false} onToggleFavorite={toggleFavorite} />}
@@ -422,7 +425,8 @@ function AppContent() {
               <h3 className="text-lg font-black mb-4">Sell Something</h3>
               <div className="grid grid-cols-2 gap-4">
                 <button onClick={() => handleViewChange("sell")} className="flex flex-col items-center gap-3 p-4 bg-gray-50 rounded-2xl"><PlusCircle className="w-6 h-6 text-primary" /><span className="text-sm font-bold">Add Item</span></button>
-                <button onClick={() => handleViewChange("seller_shop")} className="flex flex-col items-center gap-3 p-4 bg-gray-50 rounded-2xl"><Package className="w-6 h-6 text-primary" /><span className="text-sm font-bold">My Shop</span></button>
+                <button onClick={() => handleViewChange("platform_buy")} className="flex flex-col items-center gap-3 p-4 bg-green-50 rounded-2xl border border-green-100"><Store className="w-6 h-6 text-green-500" /><span className="text-sm font-bold">Sell to Relo</span></button>
+                <button onClick={() => handleViewChange("seller_shop")} className="flex flex-col items-center gap-3 p-4 bg-gray-50 rounded-2xl col-span-2 mt-2"><Package className="w-6 h-6 text-primary" /><span className="text-sm font-bold">My Shop</span></button>
               </div>
             </motion.div>
           </>
