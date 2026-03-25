@@ -1,1 +1,27 @@
-node_modules
+# 依賴套件
+node_modules/
+
+# 編譯產物
+dist/
+dist-ssr/
+*.local
+
+# 環境變數 (非常重要，避免金鑰外洩)
+.env
+.env.local
+.env.development.local
+.env.test.local
+.env.production.local
+
+# 編輯器暫存檔
+.vscode/
+.idea/
+*.suo
+*.ntvs*
+*.njsproj
+*.sln
+*.sw?
+
+# 系統檔案
+.DS_Store
+thumbs.db

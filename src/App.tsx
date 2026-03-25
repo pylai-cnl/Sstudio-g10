@@ -314,7 +314,7 @@ function AppContent() {
 
   const updateProfile = async (data: Partial<UserProfile>, silent = false) => {
     if (!user) return;
-    const publicFields = ["displayName", "photoURL", "isStudent", "dormLocation", "school", "majorInfo", "gradYear", "departureDate"];
+    const publicFields = ["displayName", "photoURL", "isStudent", "dormLocation", "school", "majorInfo", "gradYear", "departureDate", "bio"];
     const privateFields = ["email", "favorites", "cart"];
     const publicUpdate: any = {}; const privateUpdate: any = {};
     Object.keys(data).forEach(key => {

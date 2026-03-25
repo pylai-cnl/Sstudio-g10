@@ -294,3 +294,20 @@
 .close-view-btn:hover {
   color: var(--color-primary);
 }
+
+@media (max-width: 768px) {
+  .messages-split-container {
+    padding: 0 !important;
+    margin: 0 !important;
+    max-width: 100% !important;
+    width: 100% !important;
+    height: calc(100vh - 64px) !important; /* 扣除手機端頂部導航欄高度 */
+  }
+
+  /* 移除手機端內部的圓角與陰影，呈現全屏感 */
+  .messages-split-container > div {
+    border-radius: 0 !important;
+    border: none !important;
+    box-shadow: none !important;
+  }
+}
