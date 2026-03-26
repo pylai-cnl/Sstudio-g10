@@ -1,142 +1,255 @@
-import React, { useState } from "react";
-import { ChevronLeft, Edit2, Check, X, MapPin, Calendar, BookOpen, GraduationCap } from "lucide-react";
+import React, { useState, useEffect, useCallback } from "react";
+import { motion } from "motion/react";
+import { ChevronLeft, Heart, Package } from "lucide-react";
 import { Product, UserProfile } from "../types";
-import ProductCard from "../components/ProductCard";
+import { cn } from "../utils/classNames";
 
-interface SellerShopViewProps {
+// 修复：明确声明 key 属性
+export interface SellerShopViewProps {
+  key?: string;
   sellerProfile: UserProfile | null;
   products: Product[];
   onSelectProduct: (p: Product) => void;
   onBack: () => void;
   isOwnShop: boolean;
-  onUpdateProfile: (data: Partial<UserProfile>) => Promise<void>;
+  onUpdateProfile: (data: Partial<UserProfile>, silent?: boolean) => Promise<void>;
 }
 
-export default function SellerShopView({
-  sellerProfile,
-  products,
-  onSelectProduct,
-  onBack,
-  isOwnShop,
-  onUpdateProfile
+export default function SellerShopView({ 
+  sellerProfile, 
+  products, 
+  onSelectProduct, 
+  onBack, 
+  isOwnShop, 
+  onUpdateProfile 
 }: SellerShopViewProps) {
+  const [tab, setTab] = useState<"active" | "sold">("active");
   const [isEditing, setIsEditing] = useState(false);
-  const [editData, setEditData] = useState<Partial<UserProfile>>({});
+  const [editData, setEditData] = useState({
+    majorInfo: sellerProfile?.majorInfo || "Computer Science, Class of 2026",
+    bio: sellerProfile?.bio || "Selling campus essentials to new students. Fast response!"
+  });
+  const [isSaving, setIsSaving] = useState(false);
+  
+  useEffect(() => {
+    if (sellerProfile) {
+      setEditData({
+        majorInfo: sellerProfile.majorInfo || "Computer Science, Class of 2026",
+        bio: sellerProfile.bio || "Selling campus essentials to new students. Fast response!"
+      });
+    }
+  }, [sellerProfile?.uid, sellerProfile?.majorInfo, sellerProfile?.bio]);
 
-  if (!sellerProfile) return null;
+  const activeProducts = products.filter(p => p.status === "Still on");
+  const soldProducts = products.filter(p => p.status === "Sold" || p.status === "Completed");
 
-  const handleStartEdit = () => {
-    setEditData({
-      majorInfo: sellerProfile.majorInfo || "",
-      gradYear: sellerProfile.gradYear || "",
-      departureDate: sellerProfile.departureDate || "",
-      bio: (sellerProfile as any).bio || ""
-    });
-    setIsEditing(true);
-  };
+  const syncShopStats = useCallback(() => {
+    const soldCount = products.filter(p => p.status === "Sold" || p.status === "Completed").length;
+    const el = document.getElementById('shop-stat-sold');
+    if (el) {
+      el.innerText = soldCount.toString();
+    }
+  }, [products]);
+
+  useEffect(() => {
+    syncShopStats();
+  }, [syncShopStats]);
 
   const handleSave = async () => {
-    await onUpdateProfile(editData);
-    setIsEditing(false);
+    setIsSaving(true);
+    try {
+      await onUpdateProfile(editData);
+      setIsEditing(false);
+    } catch (error) {
+      console.error("Error updating profile:", error);
+    } finally {
+      setIsSaving(false);
+    }
   };
 
   return (
-    <div className="min-h-screen bg-gray-50 pb-20">
-      {/* Header */}
-      <div className="bg-white border-b border-gray-100 sticky top-0 z-10 px-4 py-4 flex items-center gap-4">
-        <button onClick={onBack} className="p-2 hover:bg-gray-100 rounded-full transition-colors">
+    <motion.div 
+      initial={{ opacity: 0, y: 20 }}
+      animate={{ opacity: 1, y: 0 }}
+      className="min-h-screen bg-white"
+    >
+      <div className="relative">
+        <div className="h-32 bg-gray-100 overflow-hidden">
+          <img 
+            src="https://picsum.photos/seed/campus/1200/400" 
+            className="w-full h-full object-cover opacity-50" 
+            alt="cover" 
+          />
+        </div>
+        <button 
+          onClick={onBack}
+          className="absolute top-4 left-4 w-10 h-10 bg-white/80 backdrop-blur-md rounded-full flex items-center justify-center text-gray-800 shadow-sm"
+        >
           <ChevronLeft className="w-6 h-6" />
         </button>
-        <h2 className="text-xl font-black">{isOwnShop ? "My Shop" : `${sellerProfile.displayName}'s Shop`}</h2>
       </div>
 
-      <div className="max-w-4xl mx-auto p-6">
-        {/* Profile Card */}
-        <div className="bg-white rounded-[32px] p-8 shadow-sm border border-black/5 mb-8 relative overflow-hidden">
-          <div className="flex flex-col md:flex-row gap-8 items-start relative z-10">
-            <div className="w-32 h-32 rounded-3xl overflow-hidden bg-gray-100 border-4 border-white shadow-xl flex-shrink-0">
-              <img src={sellerProfile.photoURL || `https://api.dicebear.com/7.x/avataaars/svg?seed=${sellerProfile.uid}`} className="w-full h-full object-cover" alt="avatar" />
-            </div>
-
-            <div className="flex-1 space-y-4">
-              <div className="flex items-center justify-between">
-                <div>
-                  <h1 className="text-3xl font-black text-gray-900">{sellerProfile.displayName}</h1>
-                  <div className="flex items-center gap-2 mt-1">
-                    <span className="bg-green-100 text-green-600 text-[10px] font-black px-2 py-0.5 rounded-full uppercase">Verified Student</span>
-                    <span className="text-gray-400 text-sm flex items-center gap-1"><MapPin className="w-3 h-3" /> {sellerProfile.dormLocation || "Cornell Tech"}</span>
-                  </div>
-                </div>
-                {isOwnShop && !isEditing && (
-                  <button onClick={handleStartEdit} className="p-3 bg-gray-50 text-gray-400 hover:text-primary hover:bg-orange-50 rounded-2xl transition-all">
-                    <Edit2 className="w-5 h-5" />
-                  </button>
-                )}
-              </div>
-
-              {isEditing ? (
-                <div className="grid grid-cols-1 md:grid-cols-2 gap-4 bg-gray-50 p-6 rounded-3xl border border-dashed border-gray-200">
-                  <div className="space-y-1">
-                    <label className="text-[10px] font-black text-gray-400 uppercase ml-2">Major Info</label>
-                    <input className="w-full bg-white border-none rounded-xl px-4 py-2 text-sm focus:ring-2 focus:ring-primary/20" value={editData.majorInfo} onChange={e => setEditData({...editData, majorInfo: e.target.value})} placeholder="e.g. Master in CS" />
-                  </div>
-                  <div className="space-y-1">
-                    <label className="text-[10px] font-black text-gray-400 uppercase ml-2">Join Year / Class of</label>
-                    <input className="w-full bg-white border-none rounded-xl px-4 py-2 text-sm focus:ring-2 focus:ring-primary/20" value={editData.gradYear} onChange={e => setEditData({...editData, gradYear: e.target.value})} placeholder="e.g. 2025" />
-                  </div>
-                  <div className="space-y-1">
-                    <label className="text-[10px] font-black text-gray-400 uppercase ml-2">Moving Out Date</label>
-                    <input type="date" className="w-full bg-white border-none rounded-xl px-4 py-2 text-sm focus:ring-2 focus:ring-primary/20" value={editData.departureDate} onChange={e => setEditData({...editData, departureDate: e.target.value})} />
-                  </div>
-                  <div className="space-y-1 md:col-span-2">
-                    <label className="text-[10px] font-black text-gray-400 uppercase ml-2">About Me</label>
-                    <textarea className="w-full bg-white border-none rounded-xl px-4 py-2 text-sm focus:ring-2 focus:ring-primary/20 min-h-[80px]" value={(editData as any).bio} onChange={e => setEditData({...editData, bio: e.target.value} as any)} placeholder="Tell others about yourself..." />
-                  </div>
-                  <div className="flex gap-2 md:col-span-2 pt-2">
-                    <button onClick={handleSave} className="flex-1 bg-primary text-white font-bold py-3 rounded-xl flex items-center justify-center gap-2 shadow-lg shadow-primary/20"><Check className="w-4 h-4" /> Save Changes</button>
-                    <button onClick={() => setIsEditing(false)} className="px-6 bg-white text-gray-500 font-bold py-3 rounded-xl border border-gray-200"><X className="w-4 h-4" /></button>
-                  </div>
-                </div>
-              ) : (
-                <>
-                  <div className="grid grid-cols-3 gap-4">
-                    <div className="bg-gray-50 p-3 rounded-2xl">
-                      <p className="text-[10px] font-black text-gray-400 uppercase mb-1 flex items-center gap-1"><BookOpen className="w-3 h-3" /> Major</p>
-                      <p className="text-sm font-bold text-gray-700">{sellerProfile.majorInfo || "Not specified"}</p>
-                    </div>
-                    <div className="bg-gray-50 p-3 rounded-2xl">
-                      <p className="text-[10px] font-black text-gray-400 uppercase mb-1 flex items-center gap-1"><GraduationCap className="w-3 h-3" /> Join</p>
-                      <p className="text-sm font-bold text-gray-700">{sellerProfile.gradYear || "Not specified"}</p>
-                    </div>
-                    <div className="bg-gray-50 p-3 rounded-2xl">
-                      <p className="text-[10px] font-black text-gray-400 uppercase mb-1 flex items-center gap-1"><Calendar className="w-3 h-3" /> Moving Out</p>
-                      <p className="text-sm font-bold text-gray-700">{sellerProfile.departureDate || "Not specified"}</p>
-                    </div>
-                  </div>
-                  <p className="text-gray-500 text-sm leading-relaxed italic">
-                    {(sellerProfile as any).bio || "No description provided."}
-                  </p>
-                </>
-              )}
-            </div>
+      <div className="px-6 -mt-10 relative z-10">
+        <div className="flex items-end mb-6">
+          <div className="w-24 h-24 rounded-full border-4 border-white overflow-hidden shadow-lg bg-white">
+            <img 
+              src={sellerProfile?.photoURL || `https://api.dicebear.com/7.x/avataaars/svg?seed=${sellerProfile?.uid}`} 
+              className="w-full h-full object-cover" 
+              alt="avatar" 
+            />
           </div>
         </div>
 
-        {/* Product Grid */}
-        <h3 className="text-xl font-black mb-6 flex items-center gap-2">
-          Listings <span className="bg-gray-200 text-gray-600 text-xs px-2 py-0.5 rounded-full">{products.length}</span>
-        </h3>
-        <div className="grid grid-cols-2 md:grid-cols-3 gap-4">
-          {products.map(product => (
-            <ProductCard key={product.id} product={product} onClick={() => onSelectProduct(product)}
-              users={Object.keys(sellerProfile).length > 0 ? { [sellerProfile.uid]: sellerProfile } : {}} 
-              isFavorite={false} // 在 Shop View 暫時預設為 false，或傳入真正的 favorites 狀態
-              onToggleFavorite={() => {}} // 若 Shop View 不需收藏功能，傳入空函式
-              onViewSellerShop={() => {}} // 已經在 Shop 了，傳入空函式即可
-            />
+        <div className="shop-profile-container">
+          <div className="shop-left-side">
+            <div className="flex items-center gap-2 mb-1">
+              <h2 className="text-2xl font-bold text-gray-900">{sellerProfile?.displayName}</h2>
+            </div>
+            
+            <div className="flex items-center gap-2 text-sm text-gray-500">
+              <span className="text-base">🏫</span>
+              <span>Cornell Tech · Mathematics '26</span>
+            </div>
+            
+            <div className="flex items-center gap-2 text-sm text-gray-500">
+              <span className="text-base">🗓️</span>
+              <span>Joined Fall 2024</span>
+            </div>
+            
+            <div className="my-2">
+              <span className="urgency-tag">✈️ Moving Out: May 2026</span>
+            </div>
+            
+            {isEditing ? (
+              <div className="space-y-3 mb-4 w-full max-w-md">
+                <input 
+                  type="text"
+                  value={editData.majorInfo}
+                  onChange={(e) => setEditData(prev => ({ ...prev, majorInfo: e.target.value }))}
+                  className="w-full bg-gray-50 border-none rounded-xl px-4 py-2 text-sm font-medium focus:ring-2 focus:ring-primary/20"
+                  placeholder="Major, Class of Year"
+                />
+                <textarea 
+                  value={editData.bio}
+                  onChange={(e) => setEditData(prev => ({ ...prev, bio: e.target.value }))}
+                  className="w-full bg-gray-50 border-none rounded-xl px-4 py-2 text-sm leading-relaxed focus:ring-2 focus:ring-primary/20 resize-none"
+                  rows={2}
+                  placeholder="Tell us about yourself..."
+                />
+              </div>
+            ) : (
+              <p className="text-sm text-gray-600 leading-relaxed max-w-md">
+                {sellerProfile?.bio || "Selling campus essentials to new students. Fast response!"}
+              </p>
+            )}
+          </div>
+
+          <div className="shop-right-side">
+            <div className="stats-row mb-6">
+              <div className="stat-item">
+                <span className="stat-value">{sellerProfile?.followersCount || 0}</span>
+                <span className="stat-label">FOLLOWERS</span>
+              </div>
+              <div className="stat-item">
+                <span id="shop-stat-sold" className="stat-value">{soldProducts.length}</span>
+                <span className="stat-label">ITEMS SOLD</span>
+              </div>
+              <div className="stat-item">
+                <span className="stat-value text-[#333]">N/A</span>
+                <span className="stat-label">REVIEWS</span>
+              </div>
+            </div>
+            
+            {!isOwnShop && (
+              <button className="follow-btn">
+                Follow
+              </button>
+            )}
+            
+            {isOwnShop && (
+              <button 
+                onClick={() => isEditing ? handleSave() : setIsEditing(true)}
+                disabled={isSaving}
+                className="text-xs font-bold text-primary hover:underline"
+              >
+                {isSaving ? "Saving..." : isEditing ? "Save" : "Edit Profile"}
+              </button>
+            )}
+          </div>
+        </div>
+
+        <div className="flex gap-8 border-b border-gray-100 mb-6">
+          <button 
+            onClick={() => setTab("active")}
+            className={cn(
+              "pb-3 text-sm font-bold transition-all relative",
+              tab === "active" ? "text-primary" : "text-gray-400"
+            )}
+          >
+            Still On ({activeProducts.length})
+            {tab === "active" && (
+              <motion.div layoutId="shop-tab" className="absolute bottom-0 left-0 right-0 h-0.5 bg-primary" />
+            )}
+          </button>
+          <button 
+            onClick={() => setTab("sold")}
+            className={cn(
+              "pb-3 text-sm font-bold transition-all relative",
+              tab === "sold" ? "text-primary" : "text-gray-400"
+            )}
+          >
+            Sold ({soldProducts.length})
+            {tab === "sold" && (
+              <motion.div layoutId="shop-tab" className="absolute bottom-0 left-0 right-0 h-0.5 bg-primary" />
+            )}
+          </button>
+        </div>
+
+        <div className="shop-product-grid">
+          {(tab === "active" ? activeProducts : soldProducts).map(product => (
+            <div 
+              key={product.id}
+              onClick={() => onSelectProduct(product)}
+              className="shop-product-card"
+            >
+              <div className="card-image-wrapper">
+                <img src={product.images[0]} alt={product.title} />
+                
+                <span className="condition-tag">
+                  {product.condition.toLowerCase().includes("brand new") ? "New" : 
+                   product.condition.toLowerCase().includes("like new") ? "Like New" : 
+                   "Used"}
+                </span>
+
+                {!isOwnShop && (
+                  <div className="heart-icon-wrapper">
+                    <Heart className="w-4 h-4" />
+                  </div>
+                )}
+
+                {product.status !== "Still on" && (
+                  <div className="absolute inset-0 bg-black/40 flex items-center justify-center z-20">
+                    <span className="bg-white/90 backdrop-blur-md px-3 py-1 rounded-full text-[10px] font-black uppercase tracking-widest text-gray-900">
+                      {product.status}
+                    </span>
+                  </div>
+                )}
+              </div>
+              
+              <div className="card-info">
+                <h4 className="product-title">{product.title}</h4>
+                <span className="price-tag">${product.price}</span>
+              </div>
+            </div>
           ))}
+          {(tab === "active" ? activeProducts : soldProducts).length === 0 && (
+            <div className="col-span-full py-20 text-center">
+              <Package className="w-12 h-12 text-gray-200 mx-auto mb-4" />
+              <p className="text-gray-400 font-bold text-sm">No items found in this category</p>
+            </div>
+          )}
         </div>
       </div>
-    </div>
+    </motion.div>
   );
 }
