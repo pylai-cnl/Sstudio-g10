@@ -4,6 +4,7 @@ export interface UserProfile {
   email: string;
   photoURL?: string;
   isStudent?: boolean;
+  isAdmin?: boolean; // NEW: 这里补上了管理员字段，红线就会消失
   dormLocation?: string;
   departureDate?: string;
   salesCount?: number;
@@ -86,4 +87,4 @@ export interface Product {
   sellerNotified?: boolean;
 }
 
-export type View = "home" | "sell" | "profile" | "favorites" | "chat" | "chat_room" | "detail" | "settings" | "orders" | "cart" | "seller_shop" | "platform_buy";
+export type View = "home" | "sell" | "profile" | "favorites" | "chat" | "chat_room" | "detail" | "settings" | "orders" | "cart" | "seller_shop" | "platform_buy" | "admin";

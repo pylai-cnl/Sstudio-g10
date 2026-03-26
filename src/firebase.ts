@@ -1,8 +1,10 @@
 /// <reference types="vite/client" />
 import { initializeApp } from "firebase/app";
-import { getAuth, connectAuthEmulator } from "firebase/auth";
-import { getFirestore, connectFirestoreEmulator } from "firebase/firestore";
-import { getStorage, connectStorageEmulator } from "firebase/storage";
+import { getAuth } from "firebase/auth";
+import { getFirestore } from "firebase/firestore";
+import { getStorage } from "firebase/storage";
+// NEW: 引入 Firebase Functions
+import { getFunctions } from "firebase/functions";
 import firebaseConfigFile from "../firebase-applet-config.json";
 
 type FirebaseAppletConfig = {
@@ -45,8 +47,5 @@ export const db = envConfig.firestoreDatabaseId
   : getFirestore(app);
 export const storage = getStorage(app);
 
-if (import.meta.env.DEV && import.meta.env.VITE_USE_FIREBASE_EMULATOR === "true") {
-  connectAuthEmulator(auth, "http://127.0.0.1:9099", { disableWarnings: true });
-  connectFirestoreEmulator(db, "127.0.0.1", 8080);
-  connectStorageEmulator(storage, "127.0.0.1", 9199);
-}
+// NEW: 导出 functions 服务
+export const functions = getFunctions(app);

@@ -2,10 +2,12 @@ import React, { useState, useEffect } from "react";
 import { motion, AnimatePresence } from "motion/react";
 import { 
   ArrowLeft, Trash2, Plus, List, Heart, MapPin, 
-  CreditCard, Camera, Pencil, ShieldCheck, ChevronRight, LogOut
+  CreditCard, Camera, Pencil, ShieldCheck, ChevronRight, LogOut, Gift, Key
 } from "lucide-react";
 import { ref, uploadBytes, getDownloadURL } from "firebase/storage";
-import { storage } from "../firebase";
+// NEW: 引入调用云函数的包
+import { httpsCallable } from "firebase/functions";
+import { storage, functions } from "../firebase";
 import { Product, UserProfile } from "../types";
 import { cn } from "../utils/classNames";
 import ProductCard from "../components/ProductCard";
@@ -63,6 +65,13 @@ export default function ProfileView({
   const [activeSubView, setActiveSubView] = useState<"main" | "orders" | "wishlist" | "favorites" | "address" | "payment">("main");
   const [showLogoutModal, setShowLogoutModal] = useState(false);
   const [showEditModal, setShowEditModal] = useState(false);
+  
+  // Promo Code Modal States
+  const [showPromoModal, setShowPromoModal] = useState(false);
+  const [promoCode, setPromoCode] = useState("");
+  const [promoError, setPromoError] = useState("");
+  const [isRedeeming, setIsRedeeming] = useState(false);
+
   const [uploading, setUploading] = useState(false);
 
   const [editingAddrIndex, setEditingAddrIndex] = useState<number | null>(null);
@@ -73,9 +82,9 @@ export default function ProfileView({
 
   useEffect(() => {
     if (setIsDirty) {
-      setIsDirty(editingAddrIndex !== null || editingPayIndex !== null || showEditModal);
+      setIsDirty(editingAddrIndex !== null || editingPayIndex !== null || showEditModal || showPromoModal);
     }
-  }, [editingAddrIndex, editingPayIndex, showEditModal, setIsDirty]);
+  }, [editingAddrIndex, editingPayIndex, showEditModal, showPromoModal, setIsDirty]);
 
   const [wishlist, setWishlist] = useState<string[]>([]);
   const [newWishlistItem, setNewWishlistItem] = useState("");
@@ -127,6 +136,31 @@ export default function ProfileView({
   const handleSaveProfile = async () => {
     await onUpdateProfile(editForm);
     setShowEditModal(false);
+  };
+
+  // 【核心修改】：现在完全通过后端云函数来验证 Promo Code
+  const handleRedeemPromo = async () => {
+    setPromoError("");
+    setIsRedeeming(true);
+
+    try {
+      // 1. 声明我们要调用的后端函数名称 "redeemPromoCode"
+      const redeemPromoCodeFn = httpsCallable(functions, 'redeemPromoCode');
+      
+      // 2. 将输入的兑换码发送给后端，剩下的全交给后端处理
+      const result = await redeemPromoCodeFn({ code: promoCode.trim().toUpperCase() });
+      
+      // 3. 如果后端没有报错，说明提权成功，更新 UI
+      setShowPromoModal(false);
+      setPromoCode("");
+      showAlert("Admin Activated 🚀", "Backend verified your code. You now have Enterprise Admin privileges.");
+    } catch (error: any) {
+      console.error("Promo code error:", error);
+      // 捕获后端的报错信息并显示给用户
+      setPromoError(error.message || "Invalid or expired promo code.");
+    } finally {
+      setIsRedeeming(false);
+    }
   };
 
   const campusTransactions = (profile?.salesCount || 0) + (profile?.purchasesCount || 0);
@@ -548,12 +582,19 @@ export default function ProfileView({
                 <Pencil className="w-4 h-4" />
               </button>
             </div>
-            {profile?.isStudent && (
-              <div className="flex items-center gap-1 text-primary font-semibold text-xs mt-0.5">
-                <ShieldCheck className="w-3.5 h-3.5" />
-                Verified Student
-              </div>
-            )}
+            <div className="flex items-center gap-2 mt-0.5">
+              {profile?.isStudent && (
+                <div className="flex items-center gap-1 text-primary font-semibold text-xs">
+                  <ShieldCheck className="w-3.5 h-3.5" />
+                  Verified Student
+                </div>
+              )}
+              {profile?.isAdmin && (
+                <div className="flex items-center gap-1 bg-red-100 text-red-600 px-2 py-0.5 rounded-full font-black text-[10px] uppercase tracking-widest">
+                  Admin
+                </div>
+              )}
+            </div>
             <div className="text-gray-400 text-xs mt-2 font-medium">
               {profile?.school || "Cornell Tech"} · {profile?.majorInfo || "Computer Science"} · Class of {profile?.gradYear || "2026"}
             </div>
@@ -630,6 +671,19 @@ export default function ProfileView({
                 <CreditCard className="w-5 h-5" />
               </div>
               <span className="text-sm font-semibold text-text-dark">Payment Methods</span>
+            </div>
+            <ChevronRight className="w-5 h-5 text-gray-300 group-hover:translate-x-0.5 transition-transform" />
+          </button>
+          
+          <button 
+            onClick={() => setShowPromoModal(true)}
+            className="profile-menu-item w-full px-5 py-4 flex items-center justify-between group"
+          >
+            <div className="flex items-center gap-4">
+              <div className="w-10 h-10 rounded-xl bg-purple-50 flex items-center justify-center text-purple-500">
+                <Gift className="w-5 h-5" />
+              </div>
+              <span className="text-sm font-semibold text-text-dark">Redeem Promo Code</span>
             </div>
             <ChevronRight className="w-5 h-5 text-gray-300 group-hover:translate-x-0.5 transition-transform" />
           </button>
@@ -742,6 +796,65 @@ export default function ProfileView({
                   className="flex-1 py-4 bg-primary text-white rounded-2xl font-bold text-sm hover:bg-primary-hover transition-colors shadow-lg shadow-primary/20"
                 >
                   Save Changes
+                </button>
+              </div>
+            </motion.div>
+          </div>
+        )}
+      </AnimatePresence>
+
+      <AnimatePresence>
+        {showPromoModal && (
+          <div className="fixed inset-0 z-[100] flex items-center justify-center p-4">
+            <motion.div 
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              exit={{ opacity: 0 }}
+              onClick={() => { setShowPromoModal(false); setPromoError(""); }}
+              className="absolute inset-0 bg-black/40 backdrop-blur-sm"
+            />
+            <motion.div 
+              initial={{ scale: 0.9, opacity: 0 }}
+              animate={{ scale: 1, opacity: 1 }}
+              exit={{ scale: 0.9, opacity: 0 }}
+              className="relative w-full max-w-[400px] bg-white rounded-3xl p-8 shadow-2xl"
+            >
+              <div className="w-16 h-16 bg-purple-50 rounded-full flex items-center justify-center text-purple-500 mx-auto mb-6">
+                <Key className="w-8 h-8" />
+              </div>
+              <h3 className="text-xl font-bold text-center text-text-dark mb-2">Redeem Promo Code</h3>
+              <p className="text-gray-500 text-sm text-center mb-6">Enter your special code to unlock exclusive features or perks.</p>
+              
+              <div className="space-y-2 mb-6">
+                <input 
+                  type="text" 
+                  value={promoCode}
+                  onChange={(e) => { setPromoCode(e.target.value); setPromoError(""); }}
+                  className={cn(
+                    "input-field text-center font-black tracking-widest uppercase",
+                    promoError ? "border-red-500 focus:ring-red-500/20" : ""
+                  )}
+                  placeholder="ENTER CODE HERE"
+                  maxLength={15}
+                />
+                {promoError && (
+                  <p className="text-xs text-red-500 text-center font-bold">{promoError}</p>
+                )}
+              </div>
+
+              <div className="flex gap-3">
+                <button 
+                  onClick={() => { setShowPromoModal(false); setPromoError(""); }}
+                  className="flex-1 py-4 bg-gray-50 text-gray-500 rounded-2xl font-bold text-sm hover:bg-gray-100 transition-colors"
+                >
+                  Cancel
+                </button>
+                <button 
+                  onClick={handleRedeemPromo}
+                  disabled={isRedeeming || !promoCode.trim()}
+                  className="flex-1 py-4 bg-purple-600 text-white rounded-2xl font-bold text-sm hover:bg-purple-700 transition-colors shadow-lg shadow-purple-600/20 disabled:opacity-50"
+                >
+                  {isRedeeming ? "Verifying..." : "Redeem"}
                 </button>
               </div>
             </motion.div>
