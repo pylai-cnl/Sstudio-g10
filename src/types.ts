@@ -59,7 +59,6 @@ export interface Message {
   senderAvatar?: string;
   text: string;
   createdAt: string;
-  // NEW: 支持特殊的系统申请消息
   type?: "text" | "system" | "edit_request";
   proposedEdits?: Partial<Product>;
   requestStatus?: "pending" | "approved" | "rejected";
@@ -82,13 +81,17 @@ export interface Product {
   dormLocation: string;
   departureDate: string;
   referenceLink?: string;
-  status: "Still on" | "Pending" | "Delivered" | "Completed" | "Sold";
+  // NEW: 加入了 Shipped 状态
+  status: "Still on" | "Pending" | "Shipped" | "Delivered" | "Completed" | "Sold";
   buyerId?: string;
   buyerName?: string;
   deliveredAt?: string;
   completedAt?: string;
   createdAt: string;
   sellerNotified?: boolean;
+  // NEW: 物流跟踪字段
+  trackingInfo?: string;
+  shippedAt?: string;
 }
 
 export type View = "home" | "sell" | "profile" | "favorites" | "chat" | "chat_room" | "detail" | "settings" | "orders" | "cart" | "seller_shop" | "platform_buy" | "admin";
