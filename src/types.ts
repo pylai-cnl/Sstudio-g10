@@ -4,7 +4,7 @@ export interface UserProfile {
   email: string;
   photoURL?: string;
   isStudent?: boolean;
-  isAdmin?: boolean; // NEW: 这里补上了管理员字段，红线就会消失
+  isAdmin?: boolean;
   dormLocation?: string;
   departureDate?: string;
   salesCount?: number;
@@ -59,6 +59,10 @@ export interface Message {
   senderAvatar?: string;
   text: string;
   createdAt: string;
+  // NEW: 支持特殊的系统申请消息
+  type?: "text" | "system" | "edit_request";
+  proposedEdits?: Partial<Product>;
+  requestStatus?: "pending" | "approved" | "rejected";
 }
 
 export interface Product {

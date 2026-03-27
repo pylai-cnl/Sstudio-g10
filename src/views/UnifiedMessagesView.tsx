@@ -1,12 +1,11 @@
 import React, { useState, useEffect, useRef } from "react";
-import { MessageSquare, Send, Bell } from "lucide-react";
+import { MessageSquare, Send, PenTool, CheckCircle, XCircle } from "lucide-react";
 import { User as FirebaseUser } from "firebase/auth";
 import { collection, query, orderBy, onSnapshot, addDoc, updateDoc, doc } from "firebase/firestore";
 import { db } from "../firebase";
 import { ChatRoom, Message, Product, UserProfile } from "../types";
 import { cn } from "../utils/classNames";
 
-// 修复：在这里明确告诉 TypeScript 我们允许接收 key 属性
 export interface UnifiedMessagesViewProps {
   key?: string;
   rooms: ChatRoom[];
@@ -113,7 +112,7 @@ export default function UnifiedMessagesView({
         </div>
 
         {/* Active Chat Pane */}
-        <div className="flex-1 flex flex-col bg-gray-50/30">
+        <div className="flex-1 flex flex-col bg-gray-50/30 relative">
           {selectedRoom ? (
             <ActiveChatPane 
               room={selectedRoom}
@@ -161,12 +160,18 @@ function ActiveChatPane({
   const [sending, setSending] = useState(false);
   const scrollRef = useRef<HTMLDivElement>(null);
 
+  // Edit Proposal States
+  const [showEditModal, setShowEditModal] = useState(false);
+  const [editForm, setEditForm] = useState({ title: '', price: '', description: '' });
+
   const otherParticipantId = room.participants.find(id => id !== currentUser.uid);
   const otherUser = otherParticipantId ? users[otherParticipantId] : null;
   const otherUserName = otherUser?.displayName || "User";
   const otherUserAvatar = otherUser?.photoURL || `https://api.dicebear.com/7.x/avataaars/svg?seed=${otherParticipantId}`;
 
   const product = products.find(p => p.id === room.productId);
+  const isSeller = product?.sellerId === currentUser.uid;
+  const isPending = product?.status === "Pending";
 
   useEffect(() => {
     if (room.unreadBy?.includes(currentUser.uid)) {
@@ -193,17 +198,18 @@ function ActiveChatPane({
     }
   }, [messages]);
 
-  const handleSend = async (e: React.FormEvent) => {
+  const handleSendText = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!newMessage.trim() || sending) return;
 
     setSending(true);
     try {
-      const msgData = {
+      const msgData: Partial<Message> = {
         senderId: currentUser.uid,
         senderName: profile?.displayName || "Anonymous",
         senderAvatar: profile?.photoURL || "",
         text: newMessage.trim(),
+        type: "text",
         createdAt: new Date().toISOString()
       };
       await addDoc(collection(db, "chatRooms", room.id, "messages"), msgData);
@@ -219,6 +225,80 @@ function ActiveChatPane({
       console.error("Failed to send message:", error);
     } finally {
       setSending(false);
+    }
+  };
+
+  const openEditModal = () => {
+    if (product) {
+      setEditForm({ title: product.title, price: product.price.toString(), description: product.description });
+      setShowEditModal(true);
+    }
+  };
+
+  const handleProposeEdit = async () => {
+    if (!editForm.title || !editForm.price || !editForm.description) return;
+    setSending(true);
+    try {
+      const msgData: Partial<Message> = {
+        senderId: currentUser.uid,
+        senderName: profile?.displayName || "Seller",
+        text: "I proposed a modification to the order details. Please review.",
+        type: "edit_request",
+        proposedEdits: {
+          title: editForm.title,
+          price: parseFloat(editForm.price),
+          description: editForm.description
+        },
+        requestStatus: "pending",
+        createdAt: new Date().toISOString()
+      };
+      await addDoc(collection(db, "chatRooms", room.id, "messages"), msgData);
+      
+      const otherParticipants = room.participants.filter(id => id !== currentUser.uid);
+      await updateDoc(doc(db, "chatRooms", room.id), {
+        lastMessage: "Modification requested",
+        lastMessageAt: new Date().toISOString(),
+        unreadBy: otherParticipants
+      });
+      setShowEditModal(false);
+    } catch (error) {
+      console.error("Failed to send edit proposal:", error);
+    } finally {
+      setSending(false);
+    }
+  };
+
+  const handleAcceptEdit = async (msg: Message) => {
+    if (!product || !msg.proposedEdits) return;
+    try {
+      // 买家同意，由于我们在 Rules 里加了放行，这里可以直接修改商品主表
+      await updateDoc(doc(db, "products", product.id), msg.proposedEdits);
+      // 更新该条聊天记录状态为通过
+      await updateDoc(doc(db, "chatRooms", room.id, "messages", msg.id), { requestStatus: "approved" });
+      
+      // 发送系统通知
+      await addDoc(collection(db, "chatRooms", room.id, "messages"), {
+        senderId: "system",
+        text: "Buyer approved the product modifications. Order details updated.",
+        type: "system",
+        createdAt: new Date().toISOString()
+      });
+    } catch (err) {
+      console.error("Failed to accept edit", err);
+    }
+  };
+
+  const handleRejectEdit = async (msg: Message) => {
+    try {
+      await updateDoc(doc(db, "chatRooms", room.id, "messages", msg.id), { requestStatus: "rejected" });
+      await addDoc(collection(db, "chatRooms", room.id, "messages"), {
+        senderId: "system",
+        text: "Buyer rejected the proposed modifications.",
+        type: "system",
+        createdAt: new Date().toISOString()
+      });
+    } catch (err) {
+      console.error("Failed to reject edit", err);
     }
   };
 
@@ -248,7 +328,10 @@ function ActiveChatPane({
             <img src={product.images[0] || "https://picsum.photos/seed/product/100"} className="w-full h-full object-cover" alt="product" />
           </div>
           <div className="flex-1 min-w-0">
-            <h5 className="text-sm font-bold text-gray-900 truncate">{product.title}</h5>
+            <div className="flex items-center gap-2">
+              <h5 className="text-sm font-bold text-gray-900 truncate">{product.title}</h5>
+              {isPending && <span className="bg-yellow-100 text-yellow-700 text-[10px] px-2 py-0.5 rounded-full font-black uppercase">Pending</span>}
+            </div>
             <p className="text-sm font-bold text-primary">${product.price}</p>
           </div>
           <button 
@@ -264,8 +347,8 @@ function ActiveChatPane({
         ref={scrollRef}
         className="flex-1 overflow-y-auto p-6 space-y-4"
       >
-        {messages.map((msg, idx) => {
-          const isSystem = msg.senderId === "system";
+        {messages.map((msg) => {
+          const isSystem = msg.senderId === "system" || msg.type === "system";
           const isMe = msg.senderId === currentUser.uid;
           
           if (isSystem) {
@@ -278,6 +361,38 @@ function ActiveChatPane({
             );
           }
 
+          // 渲染编辑请求的特殊卡片
+          if (msg.type === "edit_request") {
+            return (
+              <div key={msg.id} className={cn("flex w-full", isMe ? "justify-end" : "justify-start")}>
+                <div className={cn("bg-orange-50 border border-orange-200 rounded-2xl p-4 w-[85%] max-w-[320px] shadow-sm", isMe ? "rounded-tr-none" : "rounded-tl-none")}>
+                  <div className="flex items-center gap-1.5 mb-3">
+                    <PenTool className="w-4 h-4 text-orange-600" />
+                    <h4 className="font-bold text-orange-800 text-sm">Modification Request</h4>
+                  </div>
+                  <div className="bg-white/60 rounded-xl p-3 text-xs text-gray-700 space-y-1.5 mb-3 border border-orange-100">
+                    {msg.proposedEdits?.title && <p><span className="text-gray-400 font-bold">Title:</span> {msg.proposedEdits.title}</p>}
+                    {msg.proposedEdits?.price && <p><span className="text-gray-400 font-bold">Price:</span> ${msg.proposedEdits.price}</p>}
+                    {msg.proposedEdits?.description && <p className="line-clamp-2"><span className="text-gray-400 font-bold">Desc:</span> {msg.proposedEdits.description}</p>}
+                  </div>
+                  
+                  {msg.requestStatus === "pending" && !isMe && (
+                     <div className="flex gap-2">
+                       <button onClick={() => handleAcceptEdit(msg)} className="flex-1 bg-orange-500 text-white rounded-lg py-2 text-xs font-bold shadow-md hover:bg-orange-600 transition-colors flex items-center justify-center gap-1"><CheckCircle className="w-3.5 h-3.5" /> Accept</button>
+                       <button onClick={() => handleRejectEdit(msg)} className="flex-1 bg-white border border-orange-200 text-orange-600 rounded-lg py-2 text-xs font-bold hover:bg-orange-100 transition-colors flex items-center justify-center gap-1"><XCircle className="w-3.5 h-3.5" /> Reject</button>
+                     </div>
+                  )}
+                  {msg.requestStatus === "pending" && isMe && (
+                     <p className="text-xs text-orange-500 font-bold text-center italic">Waiting for buyer to review...</p>
+                  )}
+                  {msg.requestStatus === "approved" && <p className="text-xs text-green-600 font-bold text-center bg-green-100 py-1.5 rounded-lg">✅ Approved and Applied</p>}
+                  {msg.requestStatus === "rejected" && <p className="text-xs text-red-500 font-bold text-center bg-red-100 py-1.5 rounded-lg">❌ Rejected by Buyer</p>}
+                </div>
+              </div>
+            );
+          }
+
+          // 普通文本消息
           return (
             <div 
               key={msg.id}
@@ -300,24 +415,65 @@ function ActiveChatPane({
         })}
       </div>
 
-      <div className="p-6 bg-white border-t border-gray-100">
-        <form onSubmit={handleSend} className="flex gap-3 items-center">
+      <div className="p-4 bg-white border-t border-gray-100 flex flex-col gap-2">
+        <form onSubmit={handleSendText} className="flex gap-3 items-center">
           <input 
             type="text"
             placeholder="Type a message..."
-            className="flex-1 bg-gray-100 rounded-full px-6 py-3.5 text-sm focus:outline-none focus:ring-2 focus:ring-primary/20 transition-all"
+            className="flex-1 bg-gray-100 rounded-full px-6 py-3 text-sm focus:outline-none focus:ring-2 focus:ring-primary/20 transition-all"
             value={newMessage}
             onChange={e => setNewMessage(e.target.value)}
           />
           <button 
             type="submit"
             disabled={!newMessage.trim() || sending}
-            className="w-12 h-12 bg-primary text-white rounded-full flex items-center justify-center shadow-lg shadow-primary/20 hover:bg-primary-hover transition-all disabled:opacity-50 disabled:shadow-none"
+            className="w-10 h-10 bg-primary text-white rounded-full flex items-center justify-center shadow-lg shadow-primary/20 hover:bg-primary-hover transition-all disabled:opacity-50 disabled:shadow-none"
           >
-            <Send className="w-5 h-5" />
+            <Send className="w-4 h-4" />
           </button>
         </form>
+        
+        {isSeller && isPending && (
+          <div className="flex justify-start pl-2">
+             <button type="button" onClick={openEditModal} className="text-[10px] font-bold text-orange-500 hover:bg-orange-50 px-3 py-1.5 rounded-full transition-colors flex items-center gap-1.5 border border-orange-200">
+               <PenTool className="w-3 h-3" /> Propose Edit to Buyer
+             </button>
+          </div>
+        )}
       </div>
+
+      {/* 提议修改弹窗 */}
+      {showEditModal && (
+        <div className="absolute inset-0 z-50 flex items-center justify-center p-4">
+           <div className="absolute inset-0 bg-black/40 backdrop-blur-sm" onClick={() => setShowEditModal(false)} />
+           <div className="relative w-full max-w-sm bg-white rounded-3xl p-6 shadow-2xl">
+             <h3 className="text-lg font-black text-gray-900 mb-1">Propose Edit</h3>
+             <p className="text-xs text-gray-500 mb-4">Send a request to the buyer to modify order details.</p>
+             
+             <div className="space-y-3">
+               <div>
+                 <label className="text-[10px] font-bold text-gray-400 uppercase">Title</label>
+                 <input className="input-field py-2" value={editForm.title} onChange={e => setEditForm({...editForm, title: e.target.value})} />
+               </div>
+               <div>
+                 <label className="text-[10px] font-bold text-gray-400 uppercase">Price ($)</label>
+                 <input type="number" className="input-field py-2" value={editForm.price} onChange={e => setEditForm({...editForm, price: e.target.value})} />
+               </div>
+               <div>
+                 <label className="text-[10px] font-bold text-gray-400 uppercase">Description</label>
+                 <textarea rows={3} className="input-field py-2 resize-none" value={editForm.description} onChange={e => setEditForm({...editForm, description: e.target.value})} />
+               </div>
+             </div>
+
+             <div className="flex gap-2 mt-6">
+               <button onClick={() => setShowEditModal(false)} className="flex-1 py-3 bg-gray-50 text-gray-500 rounded-xl font-bold text-xs hover:bg-gray-100">Cancel</button>
+               <button onClick={handleProposeEdit} disabled={sending} className="flex-1 py-3 bg-orange-500 text-white rounded-xl font-bold text-xs shadow-md shadow-orange-500/20 hover:bg-orange-600 disabled:opacity-50">
+                 {sending ? "Sending..." : "Send Request"}
+               </button>
+             </div>
+           </div>
+        </div>
+      )}
     </div>
   );
 }
