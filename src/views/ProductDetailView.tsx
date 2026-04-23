@@ -51,6 +51,9 @@ export default function ProductDetailView({
   const sellerName = seller?.displayName || product.sellerName;
   const sellerIsStudent = seller?.isStudent ?? product.sellerIsStudent;
 
+  // 【核心风控】：只有卖家本人，且商品处于 "Still on" 时，才允许显示编辑和删除按钮
+  const canEdit = isOwner && product.status === "Still on";
+
   const [activeImage, setActiveImage] = useState(0);
   const [isEditing, setIsEditing] = useState(false);
   const [editData, setEditData] = useState({
@@ -104,7 +107,7 @@ export default function ProductDetailView({
               <HeartIcon className={cn("w-5 h-5", isFavorite ? "fill-red-500 text-red-500" : "")} />
             </button>
           )}
-          {isOwner ? (
+          {canEdit ? (
             <>
               <button 
                 onClick={() => setIsEditing(!isEditing)} 
@@ -120,7 +123,7 @@ export default function ProductDetailView({
               </button>
             </>
           ) : (
-            <div className="w-10" />
+            isOwner && <div className="w-10" />
           )}
         </div>
       </div>
@@ -152,7 +155,7 @@ export default function ProductDetailView({
         </div>
 
         <div className="p-6 space-y-6 pb-32 md:pb-6">
-        {isEditing ? (
+        {isEditing && canEdit ? (
           <div className="space-y-4 animate-in fade-in slide-in-from-top-2">
             <div className="space-y-1">
               <label className="text-[10px] font-bold text-gray-400 uppercase">Price ($)</label>
@@ -327,6 +330,15 @@ export default function ProductDetailView({
                   <p className="text-sm font-bold text-gray-900">You purchased this item</p>
                 </div>
                 
+                {/* 【修复】：为买家补充了跳转回订单聊天的按钮 */}
+                <button 
+                  onClick={() => onContactSeller(product)}
+                  className="w-full bg-gray-900 text-white py-3 rounded-xl font-bold flex items-center justify-center gap-2 shadow-lg hover:bg-black transition-colors"
+                >
+                  <MessageCircle className="w-5 h-5" />
+                  View Order Chat
+                </button>
+
                 {product.status === "Delivered" && (
                   <button 
                     onClick={() => onStatusChange(product.id, "Completed")}
