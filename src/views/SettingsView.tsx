@@ -8,6 +8,7 @@ import { User as FirebaseUser } from "firebase/auth";
 import { UserProfile } from "../types";
 
 export interface SettingsViewProps {
+  key?: string; // 【修复点】：在这里显式声明 key 属性
   currentUser: FirebaseUser;
   profile: UserProfile | null;
   onSave: (data: Partial<UserProfile>) => Promise<void>;
@@ -29,14 +30,12 @@ export default function SettingsView({ currentUser, profile, onSave, onBack }: S
     gradYear: profile?.gradYear || "",
   });
 
-  // 获取今天的日期，格式化为 YYYY-MM-DD，用于限制日历最小可选日期
   const today = new Date().toISOString().split('T')[0];
 
   const handleSave = async (e: React.FormEvent) => {
     e.preventDefault();
     setErrorMsg("");
 
-    // 【终极强校验】：只允许标准 YYYY-MM-DD 格式流过
     if (formData.departureDate) {
       const dateRegex = /^\d{4}-\d{2}-\d{2}$/;
       if (!dateRegex.test(formData.departureDate)) {
@@ -164,7 +163,6 @@ export default function SettingsView({ currentUser, profile, onSave, onBack }: S
             />
           </div>
 
-          {/* 加入了 min 属性，并清理了键盘阻断代码 */}
           <div className="space-y-1.5">
             <label className="text-[10px] font-bold text-orange-500 uppercase tracking-wider flex items-center gap-1.5">
               <Calendar className="w-3 h-3" /> Departure Date (Crucial for Relo)

@@ -51,7 +51,6 @@ export default function ProductDetailView({
   const sellerName = seller?.displayName || product.sellerName;
   const sellerIsStudent = seller?.isStudent ?? product.sellerIsStudent;
 
-  // 【核心风控】：只有卖家本人，且商品处于 "Still on" 时，才允许显示编辑和删除按钮
   const canEdit = isOwner && product.status === "Still on";
 
   const [activeImage, setActiveImage] = useState(0);
@@ -176,10 +175,10 @@ export default function ProductDetailView({
                 />
               </div>
               <div className="space-y-1">
-                <label className="text-[10px] font-bold text-gray-400 uppercase">Departure</label>
+                <label className="text-[10px] font-bold text-gray-400 uppercase">Sell by (Optional)</label>
                 <input 
                   type="date"
-                  className="w-full bg-gray-50 border-none rounded-xl px-4 py-2 text-sm focus:ring-2 focus:ring-primary/20"
+                  className="w-full bg-gray-50 border-none rounded-xl px-4 py-2 text-sm focus:ring-2 focus:ring-primary/20 cursor-pointer"
                   value={editData.departureDate}
                   onChange={e => setEditData(prev => ({ ...prev, departureDate: e.target.value }))}
                 />
@@ -218,7 +217,8 @@ export default function ProductDetailView({
               </div>
             </div>
 
-            <div className="grid grid-cols-2 gap-4">
+            {/* 移除了买家视角的 Departure Date，保留 Location 并让它占满全宽 */}
+            <div className="grid grid-cols-1 gap-4">
               <div className="flex items-center gap-3 bg-gray-50 p-3 rounded-2xl">
                 <div className="w-10 h-10 bg-white rounded-xl flex items-center justify-center text-primary shadow-sm">
                   <MapPin className="w-5 h-5" />
@@ -226,15 +226,6 @@ export default function ProductDetailView({
                 <div>
                   <p className="text-[10px] text-gray-400 font-bold uppercase">Location</p>
                   <p className="text-xs font-bold text-gray-700">{product.dormLocation}</p>
-                </div>
-              </div>
-              <div className="flex items-center gap-3 bg-gray-50 p-3 rounded-2xl">
-                <div className="w-10 h-10 bg-white rounded-xl flex items-center justify-center text-primary shadow-sm">
-                  <Calendar className="w-5 h-5" />
-                </div>
-                <div>
-                  <p className="text-[10px] text-gray-400 font-bold uppercase">Departure</p>
-                  <p className="text-xs font-bold text-gray-700">{product.departureDate}</p>
                 </div>
               </div>
             </div>
@@ -330,7 +321,6 @@ export default function ProductDetailView({
                   <p className="text-sm font-bold text-gray-900">You purchased this item</p>
                 </div>
                 
-                {/* 【修复】：为买家补充了跳转回订单聊天的按钮 */}
                 <button 
                   onClick={() => onContactSeller(product)}
                   className="w-full bg-gray-900 text-white py-3 rounded-xl font-bold flex items-center justify-center gap-2 shadow-lg hover:bg-black transition-colors"

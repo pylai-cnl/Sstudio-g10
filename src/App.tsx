@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useMemo } from "react";
 import { 
-  Search, ShoppingCart, PlusCircle, MessageCircle, User, Heart, Settings, Home, CheckCircle, Package, Store
+  Search, ShoppingCart, PlusCircle, MessageCircle, User, Heart, Settings, Home, CheckCircle, Package, Store, Sparkles
 } from "lucide-react";
 import { motion, AnimatePresence } from "motion/react";
 import { 
@@ -32,44 +32,28 @@ import FavoritesView from "./views/FavoritesView";
 import SettingsView from "./views/SettingsView";
 import SellerShopView from "./views/SellerShopView";
 import PlatformBuyView from "./views/PlatformBuyView";
+import MoveInView from "./views/MoveInView";
 
-// --- Error Handling Logic ---
 export enum OperationType {
-  CREATE = 'create',
-  UPDATE = 'update',
-  DELETE = 'delete',
-  LIST = 'list',
-  GET = 'get',
-  WRITE = 'write',
+  CREATE = 'create', UPDATE = 'update', DELETE = 'delete', LIST = 'list', GET = 'get', WRITE = 'write',
 }
 
 export interface FirestoreErrorInfo {
-  error: string;
-  operationType: OperationType;
-  path: string | null;
-  authInfo: any;
+  error: string; operationType: OperationType; path: string | null; authInfo: any;
 }
 
 export function handleFirestoreError(error: unknown, operationType: OperationType, path: string | null) {
   const errInfo: FirestoreErrorInfo = {
     error: error instanceof Error ? error.message : String(error),
-    authInfo: {
-      userId: auth.currentUser?.uid,
-      email: auth.currentUser?.email
-    },
-    operationType,
-    path
+    authInfo: { userId: auth.currentUser?.uid, email: auth.currentUser?.email },
+    operationType, path
   };
   console.error('Firestore Error: ', JSON.stringify(errInfo));
   throw new Error(JSON.stringify(errInfo));
 }
 
 export default function App() {
-  return (
-    <ErrorBoundary>
-      <AppContent />
-    </ErrorBoundary>
-  );
+  return <ErrorBoundary><AppContent /></ErrorBoundary>;
 }
 
 function AppContent() {
@@ -82,7 +66,11 @@ function AppContent() {
   const [defaultAddrIndex, setDefaultAddrIndex] = useState(0);
   const [payments, setPayments] = useState<any[]>([]);
   const [defaultPayIndex, setDefaultPayIndex] = useState(0);
+  
+  // 【新增】：带有自定义文案的 Success Modal
   const [showSuccessModal, setShowSuccessModal] = useState(false);
+  const [successMessage, setSuccessMessage] = useState("");
+
   const [products, setProducts] = useState<Product[]>([]);
   const [users, setUsers] = useState<Record<string, UserProfile>>({});
   const [searchQuery, setSearchQuery] = useState("");
@@ -93,6 +81,7 @@ function AppContent() {
   const [showSellOptions, setShowSellOptions] = useState(false);
   const [chatRooms, setChatRooms] = useState<ChatRoom[]>([]);
   const [loading, setLoading] = useState(true);
+  
   const [modalConfig, setModalConfig] = useState({
     isOpen: false, title: "", message: "", onConfirm: () => {}, confirmText: "OK", type: "primary" as "primary" | "danger", isAlert: false
   });
@@ -260,11 +249,15 @@ function AppContent() {
     await setDoc(doc(db, "users_private", user.uid), { email: user.email || profile.email || "", favorites: favs.includes(productId) ? favs.filter(id => id !== productId) : [...favs, productId] }, { merge: true });
   };
 
+  // 【核心修改】：把 showAlert 换成带打勾的 showSuccessModal
   const addToCart = async (productId: string) => {
     if (!user || !profile) return;
     if ((profile.cart || []).includes(productId)) return showAlert("Already in Cart", "Item is already in cart.");
+    
     await setDoc(doc(db, "users_private", user.uid), { email: user.email || "", cart: [...(profile.cart || []), productId] }, { merge: true });
-    showAlert("Added to Cart", "Item added to your shopping cart.");
+    
+    setSuccessMessage("Item successfully added to your cart!");
+    setShowSuccessModal(true);
   };
 
   const removeFromCart = async (productId: string) => {
@@ -325,7 +318,11 @@ function AppContent() {
     if (Object.keys(publicUpdate).length) promises.push(updateDoc(doc(db, "users", user.uid), publicUpdate));
     if (Object.keys(privateUpdate).length) promises.push(setDoc(doc(db, "users_private", user.uid), { email: user.email || "", ...privateUpdate }, { merge: true }));
     await Promise.all(promises);
-    if (!silent) setShowSuccessModal(true);
+    
+    if (!silent) {
+      setSuccessMessage("Profile updated successfully!");
+      setShowSuccessModal(true);
+    }
     setIsDirty(false);
   };
 
@@ -337,7 +334,6 @@ function AppContent() {
 
   return (
     <div className="min-h-screen flex flex-col bg-gray-50 relative">
-      {/* Desktop Header */}
       <header className="hidden md:block bg-white border-b border-gray-100 sticky top-0 z-50">
         <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 h-16 flex items-center justify-between">
           <div className="flex items-center gap-8">
@@ -347,25 +343,45 @@ function AppContent() {
               <input type="text" placeholder="Search..." className="w-full pl-10 pr-4 py-2 bg-gray-100 rounded-full text-sm outline-none" value={searchQuery} onChange={e => setSearchQuery(e.target.value)} />
             </div>
           </div>
+          
           <div className="flex items-center gap-6">
-            {["home", "favorites", "chat", "profile"].map(v => (
-              <button key={v} onClick={() => handleViewChange(v as View)} className={cn("text-sm font-bold capitalize relative", view === v ? "text-primary" : "text-gray-500 hover:text-gray-900")}>
-                {v}
-                {v === "chat" && unreadChatCount > 0 && <span className="absolute -top-2 -right-3 min-w-[18px] h-[18px] bg-red-500 text-white text-[10px] rounded-full flex items-center justify-center px-1">{unreadChatCount}</span>}
-                {v === "profile" && unhandledOrderCount > 0 && <span className="absolute -top-2 -right-3 min-w-[18px] h-[18px] bg-red-500 text-white text-[10px] rounded-full flex items-center justify-center px-1">{unhandledOrderCount}</span>}
-              </button>
-            ))}
+            <button onClick={() => handleViewChange("home")} className={cn("text-sm font-bold transition-colors", view === "home" ? "text-primary" : "text-gray-500 hover:text-gray-900")}>
+              Marketplace
+            </button>
+            
+            <button onClick={() => handleViewChange("move_in")} className={cn("text-sm font-bold transition-colors flex items-center gap-1", view === "move_in" ? "text-primary" : "text-gray-500 hover:text-gray-900")}>
+              <Sparkles className="w-4 h-4" /> Move In
+            </button>
+
+            <button onClick={() => handleViewChange("platform_buy")} className={cn("text-sm font-bold transition-colors flex items-center gap-1", view === "platform_buy" ? "text-orange-500" : "text-gray-500 hover:text-gray-900")}>
+              Sell to Relo
+            </button>
+
+            <button onClick={() => handleViewChange("favorites")} className={cn("text-sm font-bold transition-colors", view === "favorites" ? "text-primary" : "text-gray-500 hover:text-gray-900")}>
+              Favorites
+            </button>
+            
+            <button onClick={() => handleViewChange("chat")} className={cn("text-sm font-bold relative transition-colors", view === "chat" || view === "chat_room" ? "text-primary" : "text-gray-500 hover:text-gray-900")}>
+              Chat
+              {unreadChatCount > 0 && <span className="absolute -top-2 -right-3 min-w-[18px] h-[18px] bg-red-500 text-white text-[10px] rounded-full flex items-center justify-center px-1">{unreadChatCount}</span>}
+            </button>
+
+            <button onClick={() => handleViewChange("profile")} className={cn("text-sm font-bold relative transition-colors", view === "profile" ? "text-primary" : "text-gray-500 hover:text-gray-900")}>
+              Profile
+              {unhandledOrderCount > 0 && <span className="absolute -top-2 -right-3 min-w-[18px] h-[18px] bg-red-500 text-white text-[10px] rounded-full flex items-center justify-center px-1">{unhandledOrderCount}</span>}
+            </button>
+
             <button onClick={() => handleViewChange("cart")} className="relative p-2 text-gray-500 hover:text-primary">
               <ShoppingCart className="w-6 h-6" />
               {profile?.cart?.length ? <span className="absolute -top-1 -right-1 w-5 h-5 bg-primary text-white text-[10px] font-bold rounded-full flex items-center justify-center border-2 border-white">{profile.cart.length}</span> : null}
             </button>
+            
             <div className="relative">
               <button onClick={() => setShowSellOptions(!showSellOptions)} className="bg-primary text-white px-6 py-2 rounded-full font-bold text-sm shadow-lg hover:bg-primary-hover">Sell Item</button>
               <AnimatePresence>
                 {showSellOptions && (
                   <motion.div initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: 10 }} className="absolute top-full right-0 mt-2 w-48 bg-white rounded-2xl shadow-2xl border border-black/5 overflow-hidden z-[60]">
                     <button onClick={() => handleViewChange("sell")} className="w-full px-4 py-3 text-left hover:bg-gray-50 flex items-center gap-3"><PlusCircle className="w-5 h-5 text-primary" /><span className="text-sm font-bold">Add Item</span></button>
-                    <button onClick={() => handleViewChange("platform_buy")} className="w-full px-4 py-3 text-left hover:bg-green-50 flex items-center gap-3 border-t border-gray-50"><Store className="w-5 h-5 text-green-500" /><span className="text-sm font-bold">Sell to Relo</span></button>
                     <button onClick={() => handleViewChange("seller_shop")} className="w-full px-4 py-3 text-left hover:bg-gray-50 flex items-center gap-3 border-t border-gray-50"><Package className="w-5 h-5 text-primary" /><span className="text-sm font-bold">My Shop</span></button>
                   </motion.div>
                 )}
@@ -375,7 +391,6 @@ function AppContent() {
         </div>
       </header>
 
-      {/* Mobile Nav */}
       <nav className="md:hidden bg-white px-4 py-3 flex items-center gap-3 border-b border-gray-100 sticky top-0 z-50">
         <h1 onClick={() => handleViewChange("home")} className="text-primary font-black text-2xl tracking-tighter cursor-pointer">Relo</h1>
         <div className="flex-1 relative">
@@ -388,11 +403,11 @@ function AppContent() {
         </button>
       </nav>
 
-      {/* Main Content Area */}
       <main className="flex-1 overflow-y-auto pb-24 md:pb-10 hide-scrollbar">
         <div className="max-w-7xl mx-auto">
           <AnimatePresence mode="wait">
             {view === "home" && <HomeView key="home" products={filteredProducts} users={users} selectedCategory={selectedCategory} onSelectCategory={setSelectedCategory} onSelectProduct={(p) => { setSelectedProduct(p); handleViewChange("detail"); }} favorites={profile?.favorites || []} onToggleFavorite={toggleFavorite} onViewSellerShop={(sid) => { setSelectedSellerId(sid); handleViewChange("seller_shop"); }} />}
+            {view === "move_in" && <MoveInView key="move_in" products={products} cartItems={profile?.cart || []} onAddToCart={(p) => { addToCart(p.id); }} onProductClick={(p) => { setSelectedProduct(p); handleViewChange("detail"); }} />}
             {view === "cart" && <CartView key="cart" products={products.filter(p => profile?.cart?.includes(p.id))} onSelectProduct={(p) => { setSelectedProduct(p); handleViewChange("detail"); }} onRemoveFromCart={removeFromCart} onCheckout={checkout} onBack={goBack} />}
             {view === "sell" && <SellView key="sell" onSuccess={() => handleViewChange("home")} onBack={goBack} profile={profile} showAlert={showAlert} />}
             {view === "platform_buy" && <PlatformBuyView key="platform_buy" onSuccess={() => handleViewChange("home")} onBack={goBack} profile={profile} showAlert={showAlert} />}
@@ -402,13 +417,12 @@ function AppContent() {
             {view === "chat" && <UnifiedMessagesView key="chat" rooms={chatRooms} onSelectRoom={(r) => setSelectedChatRoom(r)} selectedRoom={selectedChatRoom} currentUser={user} profile={profile} users={users} onViewSellerShop={(sid) => { setSelectedSellerId(sid); handleViewChange("seller_shop"); }} products={products} onSelectProduct={(p) => { setSelectedProduct(p); handleViewChange("detail"); }} />}
             {view === "chat_room" && selectedChatRoom && <UnifiedMessagesView key="chat_room" rooms={chatRooms} onSelectRoom={(r) => setSelectedChatRoom(r)} selectedRoom={selectedChatRoom} currentUser={user} profile={profile} users={users} onViewSellerShop={(sid) => { setSelectedSellerId(sid); handleViewChange("seller_shop"); }} products={products} onSelectProduct={(p) => { setSelectedProduct(p); handleViewChange("detail"); }} />}
             {view === "favorites" && <FavoritesView key="favorites" products={products.filter(p => profile?.favorites?.includes(p.id))} users={users} onSelectProduct={(p) => { setSelectedProduct(p); handleViewChange("detail"); }} favorites={profile?.favorites || []} onToggleFavorite={toggleFavorite} onViewSellerShop={(sid) => { setSelectedSellerId(sid); handleViewChange("seller_shop"); }} />}
-            {view === "settings" && <SettingsView key="settings" profile={profile} onLogout={handleLogout} />}
+            {view === "settings" && <SettingsView key="settings" currentUser={user!} profile={profile} onSave={updateProfile} onBack={goBack} />}
             {view === "seller_shop" && <SellerShopView key="seller_shop" sellerProfile={selectedSellerId ? users[selectedSellerId] : profile} products={products.filter(p => p.sellerId === (selectedSellerId || user.uid))} onSelectProduct={(p) => { setSelectedProduct(p); handleViewChange("detail"); }} onBack={goBack} isOwnShop={!selectedSellerId || selectedSellerId === user.uid} onUpdateProfile={updateProfile} />}
           </AnimatePresence>
         </div>
       </main>
 
-      {/* Mobile Bottom Tab & Global Modals */}
       <div className="fixed bottom-0 left-0 right-0 bg-white border-t border-gray-100 px-6 py-3 flex justify-between items-center z-50 md:hidden">
         <NavButton icon={view === "home" ? Settings : Home} active={view === "settings"} onClick={() => handleViewChange(view === "home" ? "settings" : "home")} />
         <NavButton icon={Heart} active={view === "favorites"} onClick={() => handleViewChange("favorites")} />
@@ -422,11 +436,12 @@ function AppContent() {
           <>
             <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} onClick={() => setShowSellOptions(false)} className="fixed inset-0 bg-black/40 backdrop-blur-sm z-[55] md:hidden" />
             <motion.div initial={{ opacity: 0, y: 100 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: 100 }} className="fixed bottom-24 left-6 right-6 bg-white rounded-3xl p-6 z-[60] md:hidden shadow-2xl">
-              <h3 className="text-lg font-black mb-4">Sell Something</h3>
+              <h3 className="text-lg font-black mb-4">Explore More</h3>
               <div className="grid grid-cols-2 gap-4">
-                <button onClick={() => handleViewChange("sell")} className="flex flex-col items-center gap-3 p-4 bg-gray-50 rounded-2xl"><PlusCircle className="w-6 h-6 text-primary" /><span className="text-sm font-bold">Add Item</span></button>
-                <button onClick={() => handleViewChange("platform_buy")} className="flex flex-col items-center gap-3 p-4 bg-green-50 rounded-2xl border border-green-100"><Store className="w-6 h-6 text-green-500" /><span className="text-sm font-bold">Sell to Relo</span></button>
-                <button onClick={() => handleViewChange("seller_shop")} className="flex flex-col items-center gap-3 p-4 bg-gray-50 rounded-2xl col-span-2 mt-2"><Package className="w-6 h-6 text-primary" /><span className="text-sm font-bold">My Shop</span></button>
+                <button onClick={() => handleViewChange("sell")} className="flex flex-col items-center gap-3 p-4 bg-gray-50 rounded-2xl hover:bg-gray-100"><PlusCircle className="w-6 h-6 text-primary" /><span className="text-sm font-bold text-gray-700">Add Item</span></button>
+                <button onClick={() => handleViewChange("move_in")} className="flex flex-col items-center gap-3 p-4 bg-purple-50 border border-purple-100 rounded-2xl hover:bg-purple-100"><Sparkles className="w-6 h-6 text-purple-500" /><span className="text-sm font-bold text-purple-700">Smart Move-In</span></button>
+                <button onClick={() => handleViewChange("platform_buy")} className="flex flex-col items-center gap-3 p-4 bg-orange-50 border border-orange-100 rounded-2xl hover:bg-orange-100"><Store className="w-6 h-6 text-orange-500" /><span className="text-sm font-bold text-orange-700">Sell to Relo</span></button>
+                <button onClick={() => handleViewChange("seller_shop")} className="flex flex-col items-center gap-3 p-4 bg-gray-50 rounded-2xl hover:bg-gray-100"><Package className="w-6 h-6 text-primary" /><span className="text-sm font-bold text-gray-700">My Shop</span></button>
               </div>
             </motion.div>
           </>
@@ -435,6 +450,7 @@ function AppContent() {
 
       <ConfirmationModal isOpen={modalConfig.isOpen} title={modalConfig.title} message={modalConfig.message} confirmText={modalConfig.confirmText} type={modalConfig.type} isAlert={modalConfig.isAlert} onConfirm={() => { modalConfig.onConfirm(); setModalConfig(prev => ({ ...prev, isOpen: false })); }} onCancel={() => setModalConfig(prev => ({ ...prev, isOpen: false }))} />
 
+      {/* 【核心修改】：统一调用的打勾成功弹窗 */}
       <AnimatePresence>
         {showSuccessModal && (
           <div className="fixed inset-0 z-[100] flex items-center justify-center p-4">
@@ -442,7 +458,8 @@ function AppContent() {
             <motion.div initial={{ opacity: 0, scale: 0.9, y: 20 }} animate={{ opacity: 1, scale: 1, y: 0 }} exit={{ opacity: 0, scale: 0.9, y: 20 }} className="relative bg-white rounded-3xl p-8 w-full max-w-sm shadow-2xl text-center">
               <div className="w-20 h-20 bg-green-50 rounded-full flex items-center justify-center mx-auto mb-6"><CheckCircle className="w-8 h-8 text-green-500" /></div>
               <h3 className="text-2xl font-bold mb-2">Success</h3>
-              <button onClick={() => setShowSuccessModal(false)} className="w-full py-4 bg-primary text-white font-bold rounded-2xl hover:bg-primary-hover mt-4">OK</button>
+              {successMessage && <p className="text-sm text-gray-500 mb-2 font-medium">{successMessage}</p>}
+              <button onClick={() => setShowSuccessModal(false)} className="w-full py-4 bg-primary text-white font-bold rounded-2xl hover:bg-primary-hover mt-4 transition-colors">OK</button>
             </motion.div>
           </div>
         )}

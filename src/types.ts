@@ -94,4 +94,6 @@ export interface Product {
   shippedAt?: string;
 }
 
-export type View = "home" | "sell" | "profile" | "favorites" | "chat" | "chat_room" | "detail" | "settings" | "orders" | "cart" | "seller_shop" | "platform_buy" | "admin";
+export type View = "home" | "sell" | "profile" | "favorites" | "chat" | 
+"chat_room" | "detail" | "settings" | "orders" | "cart" | "seller_shop" 
+| "platform_buy" | "admin" | "move_in";

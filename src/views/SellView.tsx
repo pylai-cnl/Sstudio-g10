@@ -40,7 +40,6 @@ export default function SellView({ onSuccess, onBack, profile, showAlert }: Sell
 
     setUploading(true);
     try {
-      // 修复后的纯净上传逻辑：移除了超时打断和 Base64 降级，信任 SDK
       const imageUrls = await Promise.all(
         images.map(async (file) => {
           const storageRef = ref(storage, `products/${Date.now()}_${file.name}`);
@@ -190,11 +189,11 @@ export default function SellView({ onSuccess, onBack, profile, showAlert }: Sell
             </select>
           </div>
           <div className="space-y-1">
-            <label className="text-sm font-bold text-gray-600">Departure Date</label>
+            {/* 【修改】：文本改为了 Sell by (Optional)，并且去掉了 required 属性 */}
+            <label className="text-sm font-bold text-gray-600">Sell by (Optional)</label>
             <input 
-              required
               type="date"
-              className="input-field" 
+              className="input-field cursor-pointer" 
               value={formData.departureDate}
               onChange={e => setFormData(prev => ({ ...prev, departureDate: e.target.value }))}
             />

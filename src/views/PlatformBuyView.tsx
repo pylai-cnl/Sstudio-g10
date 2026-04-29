@@ -3,7 +3,7 @@ import { motion, AnimatePresence } from "motion/react";
 import { 
   Camera, Trash2, ChevronLeft, Store, ShieldCheck, MapPin, 
   Calendar, Truck, Plus, Clock, DollarSign, AlertCircle, 
-  CheckCircle, Recycle, XCircle, CalendarClock, History, Pencil
+  CheckCircle, Recycle, XCircle, CalendarClock, Pencil
 } from "lucide-react";
 import { collection, addDoc, query, where, onSnapshot, updateDoc, doc } from "firebase/firestore";
 import { ref, uploadBytes, getDownloadURL } from "firebase/storage";
@@ -30,7 +30,7 @@ interface AcquisitionRequest {
   description: string;
   images: string[];
   sellerId: string;
-  status: "Pending Evaluation" | "Offer Made" | "Rejected" | "Accepted" | "Declined" | "Free Recycle";
+  status: "Pending Evaluation" | "Offer Made" | "Rejected" | "Accepted" | "Declined" | "Free Recycle" | "Cancelled";
   offerPrice?: number;
   createdAt: string;
 }
@@ -40,19 +40,16 @@ export default function PlatformBuyView({ onSuccess, onBack, profile, showAlert 
   const [requests, setRequests] = useState<AcquisitionRequest[]>([]);
   const [loading, setLoading] = useState(true);
 
-  // --- 倒计时状态与逻辑 ---
   const [timeLeft, setTimeLeft] = useState({ days: 0, hours: 0, minutes: 0, seconds: 0 });
   const [progress, setProgress] = useState(0);
   const [isValidDate, setIsValidDate] = useState(true);
   
-  // --- 就地编辑日期状态 ---
   const [isEditingDate, setIsEditingDate] = useState(false);
   const [tempDate, setTempDate] = useState("");
   const [savingDate, setSavingDate] = useState(false);
 
   const today = new Date().toISOString().split('T')[0];
 
-  // 初始化临时日期
   useEffect(() => {
     if (profile?.departureDate) {
       setTempDate(profile.departureDate);
@@ -104,7 +101,6 @@ export default function PlatformBuyView({ onSuccess, onBack, profile, showAlert 
     return () => clearInterval(timer);
   }, [profile?.departureDate]);
 
-  // --- 保存就地编辑的日期 ---
   const handleSaveInlineDate = async () => {
     if (!profile) return;
     if (!tempDate) return showAlert("Missing Date", "Please select a date first.");
@@ -120,7 +116,6 @@ export default function PlatformBuyView({ onSuccess, onBack, profile, showAlert 
         departureDate: tempDate 
       });
       setIsEditingDate(false);
-      // 同步更新表单里的默认日期
       setFormData(prev => ({ ...prev, moveOutDate: tempDate }));
     } catch (error) {
       console.error(error);
@@ -130,7 +125,6 @@ export default function PlatformBuyView({ onSuccess, onBack, profile, showAlert 
     }
   };
 
-  // --- 监听当前用户的回收请求 ---
   useEffect(() => {
     if (!profile) return;
     
@@ -159,7 +153,6 @@ export default function PlatformBuyView({ onSuccess, onBack, profile, showAlert 
   const handleUpdateStatus = async (id: string, newStatus: AcquisitionRequest["status"]) => {
     try {
       await updateDoc(doc(db, "platform_acquisitions", id), { status: newStatus });
-      showAlert("Success", `Request updated to: ${newStatus}`);
     } catch (error: any) {
       console.error("Update failed:", error);
       if (error.message.includes("permission")) {
@@ -189,12 +182,27 @@ export default function PlatformBuyView({ onSuccess, onBack, profile, showAlert 
               {req.status === "Accepted" && <span className="bg-blue-100 text-blue-600 flex items-center gap-1 px-2 py-0.5 rounded-full"><CheckCircle className="w-3 h-3" /> Scheduled</span>}
               {req.status === "Free Recycle" && <span className="bg-teal-100 text-teal-700 flex items-center gap-1 px-2 py-0.5 rounded-full"><Recycle className="w-3 h-3" /> Free Recycle</span>}
               {req.status === "Declined" && <span className="bg-gray-100 text-gray-500 flex items-center gap-1 px-2 py-0.5 rounded-full"><XCircle className="w-3 h-3" /> Closed</span>}
+              {req.status === "Cancelled" && <span className="bg-gray-100 text-gray-500 flex items-center gap-1 px-2 py-0.5 rounded-full"><XCircle className="w-3 h-3" /> Cancelled</span>}
             </div>
           </div>
         </div>
 
         <div className="bg-gray-50 rounded-xl p-3">
-          {req.status === "Pending Evaluation" && <p className="text-xs text-gray-500 text-center italic">Our team is reviewing your item. Please check back within 24 hours.</p>}
+          {req.status === "Pending Evaluation" && (
+            <div className="flex flex-col sm:flex-row items-center justify-between gap-3">
+              <p className="text-xs text-gray-500 text-center sm:text-left italic">Our team is reviewing your item. Please check back within 24 hours.</p>
+              <button 
+                onClick={() => {
+                  if(window.confirm("Are you sure you want to cancel this request?")) {
+                    handleUpdateStatus(req.id, "Cancelled");
+                  }
+                }}
+                className="text-[10px] uppercase tracking-widest font-bold text-red-500 hover:text-red-600 px-3 py-1.5 bg-red-50 hover:bg-red-100 rounded-lg transition-colors w-full sm:w-auto shrink-0"
+              >
+                Cancel Request
+              </button>
+            </div>
+          )}
           {req.status === "Offer Made" && (
             <div className="space-y-3">
               <div className="text-center">
@@ -219,6 +227,7 @@ export default function PlatformBuyView({ onSuccess, onBack, profile, showAlert 
           {req.status === "Accepted" && <p className="text-xs text-blue-600 text-center font-bold">Great! Our logistics team will email you to confirm the pickup time.</p>}
           {req.status === "Free Recycle" && <p className="text-xs text-teal-600 text-center font-bold">Free recycling scheduled. We will email you the pickup details.</p>}
           {req.status === "Declined" && <p className="text-xs text-gray-400 text-center italic">This request has been closed.</p>}
+          {req.status === "Cancelled" && <p className="text-xs text-gray-400 text-center italic">You have successfully cancelled this request.</p>}
         </div>
       </div>
     );
@@ -289,81 +298,89 @@ export default function PlatformBuyView({ onSuccess, onBack, profile, showAlert 
       <AnimatePresence mode="wait">
         {viewMode === "dashboard" ? (
           <motion.div key="dashboard" initial={{ opacity: 0, x: -20 }} animate={{ opacity: 1, x: 0 }} exit={{ opacity: 0, x: 20 }}>
-            <div className="bg-orange-400 text-white px-6 pt-12 pb-20 rounded-b-[40px] shadow-lg relative overflow-hidden">
-              <div className="absolute right-0 top-0 opacity-[0.05] rotate-12">
-                <Clock className="w-48 h-48 text-white" />
+            {/* 【视觉更新】：告别深橙色，换上高雅护眼的奶油暖橙 (bg-orange-50) */}
+            <div className="bg-orange-50 border-b border-orange-100/50 px-6 pt-12 pb-20 rounded-b-[40px] shadow-sm relative overflow-hidden">
+              {/* 背景装饰的透明度与颜色适配浅色背景 */}
+              <div className="absolute right-0 top-0 opacity-[0.03] rotate-12 translate-x-4">
+                <Clock className="w-56 h-56 text-orange-900" />
               </div>
               
               <div className="relative z-10 max-w-2xl mx-auto">
                 <div className="flex items-center justify-between mb-8">
                   <div className="flex items-center gap-3">
-                    <button onClick={onBack} className="p-2 -ml-2 text-white hover:bg-white/20 rounded-full transition-colors">
+                    <button 
+                      onClick={onBack} 
+                      className="p-2 -ml-2 text-gray-500 hover:bg-orange-100/50 hover:text-gray-900 rounded-full transition-colors"
+                    >
                       <ChevronLeft className="w-6 h-6" />
                     </button>
                     <div>
-                      <h1 className="text-2xl font-black mb-1 text-white tracking-tight">Relo Dashboard</h1>
-                      <p className="text-white/80 text-xs font-medium">Manage your move-out inventory</p>
+                      {/* 文字颜色反转为深色 */}
+                      <h1 className="text-2xl font-black mb-1 text-gray-900 tracking-tight">Relo Dashboard</h1>
+                      <p className="text-gray-500 text-xs font-medium">Manage your move-out inventory</p>
                     </div>
                   </div>
                 </div>
 
-                <div className="bg-white/10 backdrop-blur-xl rounded-3xl p-6 border border-white/20 shadow-inner">
+                {/* 倒计时 Box 的背景与文字颜色全面适配浅色模式 */}
+                <div className="bg-white/70 backdrop-blur-md rounded-3xl p-6 border border-orange-100/50 shadow-sm">
                   {isValidDate && !isEditingDate ? (
                     <>
                       <div className="flex items-center justify-between mb-4">
                         <div className="flex items-center gap-2">
-                          <CalendarClock className="w-4 h-4 text-white" />
-                          <span className="text-[10px] font-bold uppercase tracking-widest text-white/80">Time until departure</span>
+                          <CalendarClock className="w-4 h-4 text-orange-400" />
+                          <span className="text-[10px] font-bold uppercase tracking-widest text-orange-900/60">Time until departure</span>
                         </div>
                         <button 
                           onClick={() => setIsEditingDate(true)}
-                          className="text-white/60 hover:text-white p-1 rounded-full hover:bg-white/10 transition-colors"
+                          className="text-gray-400 hover:text-orange-500 p-1.5 rounded-full hover:bg-orange-50 transition-colors"
                           title="Edit Move-out Date"
                         >
-                          <Pencil className="w-4 h-4" />
+                          <Pencil className="w-3.5 h-3.5" />
                         </button>
                       </div>
                       
                       <div className="flex justify-between items-end mb-4">
                         <div className="flex gap-4">
-                          <div><p className="text-3xl font-black text-white">{timeLeft.days}</p><p className="text-[8px] uppercase text-white/70 font-bold tracking-widest mt-0.5">Days</p></div>
-                          <div><p className="text-3xl font-black text-white">{timeLeft.hours}</p><p className="text-[8px] uppercase text-white/70 font-bold tracking-widest mt-0.5">Hrs</p></div>
-                          <div><p className="text-3xl font-black text-white">{timeLeft.minutes}</p><p className="text-[8px] uppercase text-white/70 font-bold tracking-widest mt-0.5">Min</p></div>
+                          <div><p className="text-3xl font-black text-gray-900">{timeLeft.days}</p><p className="text-[8px] uppercase text-gray-400 font-bold tracking-widest mt-0.5">Days</p></div>
+                          <div><p className="text-3xl font-black text-gray-900">{timeLeft.hours}</p><p className="text-[8px] uppercase text-gray-400 font-bold tracking-widest mt-0.5">Hrs</p></div>
+                          <div><p className="text-3xl font-black text-gray-900">{timeLeft.minutes}</p><p className="text-[8px] uppercase text-gray-400 font-bold tracking-widest mt-0.5">Min</p></div>
                         </div>
                         <div className="text-right">
-                          <p className="text-sm font-bold text-white">{Math.round(progress)}%</p>
-                          <p className="text-[8px] uppercase text-white/70 font-bold tracking-widest mt-0.5">Remaining</p>
+                          <p className="text-sm font-bold text-gray-900">{Math.round(progress)}%</p>
+                          <p className="text-[8px] uppercase text-gray-400 font-bold tracking-widest mt-0.5">Remaining</p>
                         </div>
                       </div>
-                      <div className="w-full bg-black/10 h-2 rounded-full overflow-hidden shadow-inner">
-                        <div className="h-full bg-white/90 rounded-full transition-all duration-1000" style={{ width: `${progress}%` }} />
+                      {/* 进度条轨道变浅，填充色变为亮橙色 */}
+                      <div className="w-full bg-orange-100/50 h-2 rounded-full overflow-hidden">
+                        <div className="h-full bg-orange-500 rounded-full transition-all duration-1000 shadow-sm" style={{ width: `${progress}%` }} />
                       </div>
                     </>
                   ) : (
                     <div className="space-y-4">
                       <div className="flex items-center gap-2 mb-2">
-                        <CalendarClock className="w-4 h-4 text-white" />
-                        <span className="text-[10px] font-bold uppercase tracking-widest text-white/90">
+                        <CalendarClock className="w-4 h-4 text-orange-400" />
+                        <span className="text-[10px] font-bold uppercase tracking-widest text-orange-900/80">
                           {isValidDate ? "Update Move-out Date" : "Set Move-out Date"}
                         </span>
                       </div>
-                      <p className="text-xs text-white/80 leading-relaxed">
+                      <p className="text-xs text-gray-600 leading-relaxed font-medium">
                         Set your official move-out date to activate the countdown and help us coordinate logistics.
                       </p>
                       <div className="flex flex-col sm:flex-row gap-3">
+                        {/* 输入框文字变为深色 */}
                         <input 
                           type="date"
                           min={today}
                           value={tempDate}
                           onChange={(e) => setTempDate(e.target.value)}
-                          className="flex-1 bg-white/20 border border-white/30 rounded-xl px-4 py-3 text-sm text-white focus:outline-none focus:ring-2 focus:ring-white/50"
-                          style={{ colorScheme: 'dark' }} // 适配深色背景使日历图标变白
+                          className="flex-1 bg-white border border-orange-200 rounded-xl px-4 py-3 text-sm text-gray-900 focus:outline-none focus:ring-2 focus:ring-orange-500/20 shadow-sm"
                         />
                         <div className="flex gap-2">
                           <button 
                             onClick={handleSaveInlineDate}
                             disabled={savingDate}
-                            className="flex-1 sm:flex-none bg-white text-orange-500 px-6 py-3 rounded-xl font-bold text-sm shadow-md hover:bg-gray-50 transition-colors disabled:opacity-50"
+                            className="flex-1 sm:flex-none bg-orange-500 text-white px-6 py-3 rounded-xl font-bold text-sm shadow-md hover:bg-orange-600 transition-colors disabled:opacity-50"
                           >
                             {savingDate ? "Saving..." : "Save"}
                           </button>
@@ -373,7 +390,7 @@ export default function PlatformBuyView({ onSuccess, onBack, profile, showAlert 
                                 setIsEditingDate(false);
                                 setTempDate(profile?.departureDate || "");
                               }}
-                              className="px-4 py-3 text-white/80 hover:text-white text-sm font-bold transition-colors"
+                              className="px-4 py-3 text-gray-400 hover:text-gray-800 text-sm font-bold transition-colors"
                             >
                               Cancel
                             </button>
@@ -387,11 +404,12 @@ export default function PlatformBuyView({ onSuccess, onBack, profile, showAlert 
             </div>
 
             <div className="px-6 -mt-10 max-w-2xl mx-auto relative z-20">
+              {/* 操作按钮增加反差，使其在浅色背景下更醒目 */}
               <button 
                 onClick={() => setViewMode("form")}
-                className="w-full bg-white text-orange-400 py-4 rounded-2xl font-black shadow-xl shadow-black/5 flex items-center justify-center gap-2 hover:scale-[1.02] active:scale-95 transition-all mb-8 border border-gray-100"
+                className="w-full bg-white text-orange-500 py-4 rounded-2xl font-black shadow-lg shadow-black/5 flex items-center justify-center gap-2 hover:scale-[1.02] active:scale-95 transition-all mb-8 border border-orange-100"
               >
-                <Plus className="w-5 h-5" /> Sell New Item to Relo
+                <Plus className="w-5 h-5 stroke-[3px]" /> Sell New Item to Relo
               </button>
 
               {loading ? (
@@ -508,7 +526,7 @@ export default function PlatformBuyView({ onSuccess, onBack, profile, showAlert 
                 <textarea required rows={3} className="input-field bg-white shadow-sm resize-none focus:ring-orange-400/20" placeholder="Please honestly describe any scratches, missing parts, or flaws to ensure an accurate quote..." value={formData.description} onChange={e => setFormData(prev => ({ ...prev, description: e.target.value }))} />
               </div>
 
-              <button disabled={uploading} className="w-full bg-orange-400 text-white rounded-xl font-bold py-4 text-base mt-2 flex items-center justify-center gap-2 shadow-lg shadow-orange-400/20 hover:bg-orange-500 transition-colors">
+              <button disabled={uploading} className="w-full bg-orange-500 text-white rounded-xl font-bold py-4 text-base mt-2 flex items-center justify-center gap-2 shadow-lg shadow-orange-500/20 hover:bg-orange-600 transition-colors">
                 {uploading ? <><div className="w-5 h-5 border-2 border-white border-t-transparent rounded-full animate-spin" />Submitting...</> : <><Store className="w-5 h-5" /> Request Buyout Quote</>}
               </button>
             </form>
