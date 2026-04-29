@@ -34,27 +34,16 @@ import SellerShopView from "./views/SellerShopView";
 import PlatformBuyView from "./views/PlatformBuyView";
 import MoveInView from "./views/MoveInView";
 
-export enum OperationType {
-  CREATE = 'create', UPDATE = 'update', DELETE = 'delete', LIST = 'list', GET = 'get', WRITE = 'write',
-}
-
-export interface FirestoreErrorInfo {
-  error: string; operationType: OperationType; path: string | null; authInfo: any;
-}
+export enum OperationType { CREATE = 'create', UPDATE = 'update', DELETE = 'delete', LIST = 'list', GET = 'get', WRITE = 'write' }
+export interface FirestoreErrorInfo { error: string; operationType: OperationType; path: string | null; authInfo: any; }
 
 export function handleFirestoreError(error: unknown, operationType: OperationType, path: string | null) {
-  const errInfo: FirestoreErrorInfo = {
-    error: error instanceof Error ? error.message : String(error),
-    authInfo: { userId: auth.currentUser?.uid, email: auth.currentUser?.email },
-    operationType, path
-  };
+  const errInfo: FirestoreErrorInfo = { error: error instanceof Error ? error.message : String(error), authInfo: { userId: auth.currentUser?.uid, email: auth.currentUser?.email }, operationType, path };
   console.error('Firestore Error: ', JSON.stringify(errInfo));
   throw new Error(JSON.stringify(errInfo));
 }
 
-export default function App() {
-  return <ErrorBoundary><AppContent /></ErrorBoundary>;
-}
+export default function App() { return <ErrorBoundary><AppContent /></ErrorBoundary>; }
 
 function AppContent() {
   const [user, setUser] = useState<FirebaseUser | null>(null);
@@ -66,11 +55,8 @@ function AppContent() {
   const [defaultAddrIndex, setDefaultAddrIndex] = useState(0);
   const [payments, setPayments] = useState<any[]>([]);
   const [defaultPayIndex, setDefaultPayIndex] = useState(0);
-  
-  // 【新增】：带有自定义文案的 Success Modal
   const [showSuccessModal, setShowSuccessModal] = useState(false);
   const [successMessage, setSuccessMessage] = useState("");
-
   const [products, setProducts] = useState<Product[]>([]);
   const [users, setUsers] = useState<Record<string, UserProfile>>({});
   const [searchQuery, setSearchQuery] = useState("");
@@ -81,10 +67,7 @@ function AppContent() {
   const [showSellOptions, setShowSellOptions] = useState(false);
   const [chatRooms, setChatRooms] = useState<ChatRoom[]>([]);
   const [loading, setLoading] = useState(true);
-  
-  const [modalConfig, setModalConfig] = useState({
-    isOpen: false, title: "", message: "", onConfirm: () => {}, confirmText: "OK", type: "primary" as "primary" | "danger", isAlert: false
-  });
+  const [modalConfig, setModalConfig] = useState({ isOpen: false, title: "", message: "", onConfirm: () => {}, confirmText: "OK", type: "primary" as "primary" | "danger", isAlert: false });
 
   const showConfirm = (config: any) => setModalConfig({ ...config, isOpen: true, isAlert: false });
   const showAlert = (title: string, message: string) => setModalConfig({ isOpen: true, title, message, onConfirm: () => {}, confirmText: "OK", type: "primary", isAlert: true });
@@ -92,14 +75,15 @@ function AppContent() {
   const ensurePrivateProfileDoc = async (firebaseUser: FirebaseUser) => {
     const userPrivateDocRef = doc(db, "users_private", firebaseUser.uid);
     const userPrivateDoc = await getDoc(userPrivateDocRef);
-    if (!userPrivateDoc.exists()) {
-      await setDoc(userPrivateDocRef, { email: firebaseUser.email || "", favorites: [], cart: [] });
-    }
+    if (!userPrivateDoc.exists()) await setDoc(userPrivateDocRef, { email: firebaseUser.email || "", favorites: [], cart: [] });
     return userPrivateDocRef;
   };
 
   const updateProductStatusSafely = async (product: Product, nextStatus: Product["status"]) => {
     if (!user) throw new Error("You must be logged in.");
+    
+    const isSuperAdmin = user.email === "relo@relo.com";
+
     await runTransaction(db, async (transaction) => {
       const productRef = doc(db, "products", product.id);
       const productSnap = await transaction.get(productRef);
@@ -109,24 +93,24 @@ function AppContent() {
 
       if (nextStatus === "Pending") {
         if (latest.status !== "Still on") throw new Error("This item is no longer available.");
-        if (latest.sellerId === user.uid) throw new Error("You cannot purchase your own item.");
+        if (latest.sellerId === user.uid && !isSuperAdmin) throw new Error("You cannot purchase your own item.");
         updates.status = "Pending";
         updates.buyerId = user.uid;
         updates.buyerName = profile?.displayName || user.displayName || user.email?.split("@")[0] || "Buyer";
         updates.sellerNotified = false;
       } else if (nextStatus === "Delivered") {
         if (latest.status !== "Pending") throw new Error("Only pending orders can be marked as delivered.");
-        if (latest.sellerId !== user.uid) throw new Error("Only the seller can mark an item as delivered.");
+        if (latest.sellerId !== user.uid && !isSuperAdmin) throw new Error("Only the seller can mark an item as delivered.");
         updates.status = "Delivered";
         updates.deliveredAt = new Date().toISOString();
       } else if (nextStatus === "Completed") {
         if (latest.status !== "Delivered") throw new Error("Only delivered orders can be completed.");
-        if (latest.buyerId !== user.uid) throw new Error("Only the buyer can complete this order.");
+        if (latest.buyerId !== user.uid && !isSuperAdmin) throw new Error("Only the buyer can complete this order.");
         updates.status = "Completed";
         updates.completedAt = new Date().toISOString();
       } else if (nextStatus === "Still on") {
         if (!["Pending", "Delivered"].includes(latest.status)) throw new Error("This order cannot be reset to available.");
-        if (latest.sellerId !== user.uid) throw new Error("Only the seller can cancel this transaction.");
+        if (latest.sellerId !== user.uid && !isSuperAdmin) throw new Error("Only the seller can cancel this transaction.");
         updates.status = "Still on";
         updates.buyerId = "";
         updates.buyerName = "";
@@ -134,7 +118,7 @@ function AppContent() {
         updates.completedAt = "";
         updates.sellerNotified = true;
       } else if (nextStatus === "Sold") {
-        if (latest.sellerId !== user.uid) throw new Error("Only the seller can mark this item as sold.");
+        if (latest.sellerId !== user.uid && !isSuperAdmin) throw new Error("Only the seller can mark this item as sold.");
         updates.status = "Sold";
       }
       transaction.update(productRef, updates as any);
@@ -159,17 +143,25 @@ function AppContent() {
           const [userDoc, userPrivateDoc] = await Promise.all([getDoc(userDocRef), getDoc(userPrivateDocRef)]);
           const email = user.email || "";
           const isStudent = email.toLowerCase().endsWith(".edu") || email.toLowerCase().endsWith(".ca");
+          
+          const isAdmin = email.toLowerCase() === "relo@relo.com";
 
           if (!userDoc.exists()) {
-            const newProfile = { displayName: user.displayName || email.split("@")[0] || "Anonymous", photoURL: user.photoURL || "", isStudent, dormLocation: "Cornell Tech House" };
+            const newProfile = { displayName: user.displayName || email.split("@")[0] || "Anonymous", photoURL: user.photoURL || "", isStudent, isAdmin, dormLocation: "Cornell Tech House" };
             const newPrivateProfile = userPrivateDoc.exists() ? userPrivateDoc.data() : { email, favorites: [], cart: [] };
             await Promise.all([setDoc(userDocRef, newProfile), setDoc(userPrivateDocRef, newPrivateProfile, { merge: true })]);
             setProfile({ uid: user.uid, ...newProfile, ...newPrivateProfile } as UserProfile);
           } else {
             const existingData = userDoc.data();
             const existingPrivateData = userPrivateDoc.data() || { email, favorites: [], cart: [] };
-            if (user.photoURL && existingData.photoURL !== user.photoURL) await updateDoc(userDocRef, { photoURL: user.photoURL });
-            setProfile({ uid: user.uid, ...existingData, ...existingPrivateData, ...(user.photoURL ? { photoURL: user.photoURL } : {}) } as UserProfile);
+            const updatesToPublic: any = {};
+            if (user.photoURL && existingData.photoURL !== user.photoURL) updatesToPublic.photoURL = user.photoURL;
+            if (existingData.isAdmin !== isAdmin) updatesToPublic.isAdmin = isAdmin; 
+            
+            if (Object.keys(updatesToPublic).length > 0) {
+              await updateDoc(userDocRef, updatesToPublic);
+            }
+            setProfile({ uid: user.uid, ...existingData, ...existingPrivateData, isAdmin, ...(user.photoURL ? { photoURL: user.photoURL } : {}) } as UserProfile);
           }
 
           profileUnsubscribe = onSnapshot(userDocRef, (doc) => { if (doc.exists()) setProfile(prev => prev ? { ...prev, ...doc.data() } : { uid: doc.id, ...doc.data() } as UserProfile); });
@@ -249,13 +241,10 @@ function AppContent() {
     await setDoc(doc(db, "users_private", user.uid), { email: user.email || profile.email || "", favorites: favs.includes(productId) ? favs.filter(id => id !== productId) : [...favs, productId] }, { merge: true });
   };
 
-  // 【核心修改】：把 showAlert 换成带打勾的 showSuccessModal
   const addToCart = async (productId: string) => {
     if (!user || !profile) return;
     if ((profile.cart || []).includes(productId)) return showAlert("Already in Cart", "Item is already in cart.");
-    
     await setDoc(doc(db, "users_private", user.uid), { email: user.email || "", cart: [...(profile.cart || []), productId] }, { merge: true });
-    
     setSuccessMessage("Item successfully added to your cart!");
     setShowSuccessModal(true);
   };
@@ -307,7 +296,7 @@ function AppContent() {
 
   const updateProfile = async (data: Partial<UserProfile>, silent = false) => {
     if (!user) return;
-    const publicFields = ["displayName", "photoURL", "isStudent", "dormLocation", "school", "majorInfo", "gradYear", "departureDate", "bio"];
+    const publicFields = ["displayName", "photoURL", "isStudent", "dormLocation", "school", "majorInfo", "gradYear", "departureDate", "bio", "isAdmin"];
     const privateFields = ["email", "favorites", "cart"];
     const publicUpdate: any = {}; const privateUpdate: any = {};
     Object.keys(data).forEach(key => {
@@ -318,11 +307,7 @@ function AppContent() {
     if (Object.keys(publicUpdate).length) promises.push(updateDoc(doc(db, "users", user.uid), publicUpdate));
     if (Object.keys(privateUpdate).length) promises.push(setDoc(doc(db, "users_private", user.uid), { email: user.email || "", ...privateUpdate }, { merge: true }));
     await Promise.all(promises);
-    
-    if (!silent) {
-      setSuccessMessage("Profile updated successfully!");
-      setShowSuccessModal(true);
-    }
+    if (!silent) { setSuccessMessage("Profile updated successfully!"); setShowSuccessModal(true); }
     setIsDirty(false);
   };
 
@@ -343,46 +328,22 @@ function AppContent() {
               <input type="text" placeholder="Search..." className="w-full pl-10 pr-4 py-2 bg-gray-100 rounded-full text-sm outline-none" value={searchQuery} onChange={e => setSearchQuery(e.target.value)} />
             </div>
           </div>
-          
           <div className="flex items-center gap-6">
-            <button onClick={() => handleViewChange("home")} className={cn("text-sm font-bold transition-colors", view === "home" ? "text-primary" : "text-gray-500 hover:text-gray-900")}>
-              Marketplace
-            </button>
-            
-            <button onClick={() => handleViewChange("move_in")} className={cn("text-sm font-bold transition-colors flex items-center gap-1", view === "move_in" ? "text-primary" : "text-gray-500 hover:text-gray-900")}>
-              <Sparkles className="w-4 h-4" /> Move In
-            </button>
-
-            <button onClick={() => handleViewChange("platform_buy")} className={cn("text-sm font-bold transition-colors flex items-center gap-1", view === "platform_buy" ? "text-orange-500" : "text-gray-500 hover:text-gray-900")}>
-              Sell to Relo
-            </button>
-
-            <button onClick={() => handleViewChange("favorites")} className={cn("text-sm font-bold transition-colors", view === "favorites" ? "text-primary" : "text-gray-500 hover:text-gray-900")}>
-              Favorites
-            </button>
-            
-            <button onClick={() => handleViewChange("chat")} className={cn("text-sm font-bold relative transition-colors", view === "chat" || view === "chat_room" ? "text-primary" : "text-gray-500 hover:text-gray-900")}>
-              Chat
-              {unreadChatCount > 0 && <span className="absolute -top-2 -right-3 min-w-[18px] h-[18px] bg-red-500 text-white text-[10px] rounded-full flex items-center justify-center px-1">{unreadChatCount}</span>}
-            </button>
-
-            <button onClick={() => handleViewChange("profile")} className={cn("text-sm font-bold relative transition-colors", view === "profile" ? "text-primary" : "text-gray-500 hover:text-gray-900")}>
-              Profile
-              {unhandledOrderCount > 0 && <span className="absolute -top-2 -right-3 min-w-[18px] h-[18px] bg-red-500 text-white text-[10px] rounded-full flex items-center justify-center px-1">{unhandledOrderCount}</span>}
-            </button>
-
-            <button onClick={() => handleViewChange("cart")} className="relative p-2 text-gray-500 hover:text-primary">
-              <ShoppingCart className="w-6 h-6" />
-              {profile?.cart?.length ? <span className="absolute -top-1 -right-1 w-5 h-5 bg-primary text-white text-[10px] font-bold rounded-full flex items-center justify-center border-2 border-white">{profile.cart.length}</span> : null}
-            </button>
-            
+            <button onClick={() => handleViewChange("home")} className={cn("text-sm font-bold transition-colors", view === "home" ? "text-primary" : "text-gray-500 hover:text-gray-900")}>Marketplace</button>
+            <button onClick={() => handleViewChange("move_in")} className={cn("text-sm font-bold transition-colors flex items-center gap-1", view === "move_in" ? "text-primary" : "text-gray-500 hover:text-gray-900")}><Sparkles className="w-4 h-4" /> Move In</button>
+            <button onClick={() => handleViewChange("platform_buy")} className={cn("text-sm font-bold transition-colors flex items-center gap-1", view === "platform_buy" ? "text-orange-500" : "text-gray-500 hover:text-gray-900")}>Sell to Relo</button>
+            <button onClick={() => handleViewChange("favorites")} className={cn("text-sm font-bold transition-colors", view === "favorites" ? "text-primary" : "text-gray-500 hover:text-gray-900")}>Favorites</button>
+            <button onClick={() => handleViewChange("chat")} className={cn("text-sm font-bold relative transition-colors", view === "chat" || view === "chat_room" ? "text-primary" : "text-gray-500 hover:text-gray-900")}>Chat {unreadChatCount > 0 && <span className="absolute -top-2 -right-3 min-w-[18px] h-[18px] bg-red-500 text-white text-[10px] rounded-full flex items-center justify-center px-1">{unreadChatCount}</span>}</button>
+            <button onClick={() => handleViewChange("profile")} className={cn("text-sm font-bold relative transition-colors", view === "profile" ? "text-primary" : "text-gray-500 hover:text-gray-900")}>Profile {unhandledOrderCount > 0 && <span className="absolute -top-2 -right-3 min-w-[18px] h-[18px] bg-red-500 text-white text-[10px] rounded-full flex items-center justify-center px-1">{unhandledOrderCount}</span>}</button>
+            <button onClick={() => handleViewChange("cart")} className="relative p-2 text-gray-500 hover:text-primary"><ShoppingCart className="w-6 h-6" />{profile?.cart?.length ? <span className="absolute -top-1 -right-1 w-5 h-5 bg-primary text-white text-[10px] font-bold rounded-full flex items-center justify-center border-2 border-white">{profile.cart.length}</span> : null}</button>
             <div className="relative">
               <button onClick={() => setShowSellOptions(!showSellOptions)} className="bg-primary text-white px-6 py-2 rounded-full font-bold text-sm shadow-lg hover:bg-primary-hover">Sell Item</button>
               <AnimatePresence>
                 {showSellOptions && (
                   <motion.div initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: 10 }} className="absolute top-full right-0 mt-2 w-48 bg-white rounded-2xl shadow-2xl border border-black/5 overflow-hidden z-[60]">
                     <button onClick={() => handleViewChange("sell")} className="w-full px-4 py-3 text-left hover:bg-gray-50 flex items-center gap-3"><PlusCircle className="w-5 h-5 text-primary" /><span className="text-sm font-bold">Add Item</span></button>
-                    <button onClick={() => handleViewChange("seller_shop")} className="w-full px-4 py-3 text-left hover:bg-gray-50 flex items-center gap-3 border-t border-gray-50"><Package className="w-5 h-5 text-primary" /><span className="text-sm font-bold">My Shop</span></button>
+                    {/* 【修复点】：在这里加入清空 selectedSellerId 的逻辑 */}
+                    <button onClick={() => { setSelectedSellerId(null); handleViewChange("seller_shop"); setShowSellOptions(false); }} className="w-full px-4 py-3 text-left hover:bg-gray-50 flex items-center gap-3 border-t border-gray-50"><Package className="w-5 h-5 text-primary" /><span className="text-sm font-bold">My Shop</span></button>
                   </motion.div>
                 )}
               </AnimatePresence>
@@ -418,7 +379,8 @@ function AppContent() {
             {view === "chat_room" && selectedChatRoom && <UnifiedMessagesView key="chat_room" rooms={chatRooms} onSelectRoom={(r) => setSelectedChatRoom(r)} selectedRoom={selectedChatRoom} currentUser={user} profile={profile} users={users} onViewSellerShop={(sid) => { setSelectedSellerId(sid); handleViewChange("seller_shop"); }} products={products} onSelectProduct={(p) => { setSelectedProduct(p); handleViewChange("detail"); }} />}
             {view === "favorites" && <FavoritesView key="favorites" products={products.filter(p => profile?.favorites?.includes(p.id))} users={users} onSelectProduct={(p) => { setSelectedProduct(p); handleViewChange("detail"); }} favorites={profile?.favorites || []} onToggleFavorite={toggleFavorite} onViewSellerShop={(sid) => { setSelectedSellerId(sid); handleViewChange("seller_shop"); }} />}
             {view === "settings" && <SettingsView key="settings" currentUser={user!} profile={profile} onSave={updateProfile} onBack={goBack} />}
-            {view === "seller_shop" && <SellerShopView key="seller_shop" sellerProfile={selectedSellerId ? users[selectedSellerId] : profile} products={products.filter(p => p.sellerId === (selectedSellerId || user.uid))} onSelectProduct={(p) => { setSelectedProduct(p); handleViewChange("detail"); }} onBack={goBack} isOwnShop={!selectedSellerId || selectedSellerId === user.uid} onUpdateProfile={updateProfile} />}
+            {/* 【修复点】：加入动态 key 强迫刷新页面 */}
+            {view === "seller_shop" && <SellerShopView key={`seller_shop-${selectedSellerId || user.uid}`} sellerProfile={selectedSellerId ? users[selectedSellerId] : profile} products={products.filter(p => p.sellerId === (selectedSellerId || user.uid))} onSelectProduct={(p) => { setSelectedProduct(p); handleViewChange("detail"); }} onBack={goBack} isOwnShop={!selectedSellerId || selectedSellerId === user.uid} onUpdateProfile={updateProfile} />}
           </AnimatePresence>
         </div>
       </main>
@@ -441,7 +403,8 @@ function AppContent() {
                 <button onClick={() => handleViewChange("sell")} className="flex flex-col items-center gap-3 p-4 bg-gray-50 rounded-2xl hover:bg-gray-100"><PlusCircle className="w-6 h-6 text-primary" /><span className="text-sm font-bold text-gray-700">Add Item</span></button>
                 <button onClick={() => handleViewChange("move_in")} className="flex flex-col items-center gap-3 p-4 bg-purple-50 border border-purple-100 rounded-2xl hover:bg-purple-100"><Sparkles className="w-6 h-6 text-purple-500" /><span className="text-sm font-bold text-purple-700">Smart Move-In</span></button>
                 <button onClick={() => handleViewChange("platform_buy")} className="flex flex-col items-center gap-3 p-4 bg-orange-50 border border-orange-100 rounded-2xl hover:bg-orange-100"><Store className="w-6 h-6 text-orange-500" /><span className="text-sm font-bold text-orange-700">Sell to Relo</span></button>
-                <button onClick={() => handleViewChange("seller_shop")} className="flex flex-col items-center gap-3 p-4 bg-gray-50 rounded-2xl hover:bg-gray-100"><Package className="w-6 h-6 text-primary" /><span className="text-sm font-bold text-gray-700">My Shop</span></button>
+                {/* 【修复点】：手机端也同样修改 */}
+                <button onClick={() => { setSelectedSellerId(null); handleViewChange("seller_shop"); setShowSellOptions(false); }} className="flex flex-col items-center gap-3 p-4 bg-gray-50 rounded-2xl hover:bg-gray-100"><Package className="w-6 h-6 text-primary" /><span className="text-sm font-bold text-gray-700">My Shop</span></button>
               </div>
             </motion.div>
           </>
@@ -450,7 +413,6 @@ function AppContent() {
 
       <ConfirmationModal isOpen={modalConfig.isOpen} title={modalConfig.title} message={modalConfig.message} confirmText={modalConfig.confirmText} type={modalConfig.type} isAlert={modalConfig.isAlert} onConfirm={() => { modalConfig.onConfirm(); setModalConfig(prev => ({ ...prev, isOpen: false })); }} onCancel={() => setModalConfig(prev => ({ ...prev, isOpen: false }))} />
 
-      {/* 【核心修改】：统一调用的打勾成功弹窗 */}
       <AnimatePresence>
         {showSuccessModal && (
           <div className="fixed inset-0 z-[100] flex items-center justify-center p-4">
@@ -466,4 +428,4 @@ function AppContent() {
       </AnimatePresence>
     </div>
   );
-}
+} 
