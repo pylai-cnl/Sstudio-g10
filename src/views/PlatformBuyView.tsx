@@ -3,7 +3,7 @@ import { motion, AnimatePresence } from "motion/react";
 import { 
   Camera, Trash2, ChevronLeft, Store, ShieldCheck, MapPin, 
   Calendar, Truck, Plus, Clock, DollarSign, AlertCircle, 
-  CheckCircle, Recycle, XCircle, CalendarClock, History
+  CheckCircle, Recycle, XCircle, CalendarClock, History, Pencil
 } from "lucide-react";
 import { collection, addDoc, query, where, onSnapshot, updateDoc, doc } from "firebase/firestore";
 import { ref, uploadBytes, getDownloadURL } from "firebase/storage";
@@ -40,9 +40,24 @@ export default function PlatformBuyView({ onSuccess, onBack, profile, showAlert 
   const [requests, setRequests] = useState<AcquisitionRequest[]>([]);
   const [loading, setLoading] = useState(true);
 
+  // --- 倒计时状态与逻辑 ---
   const [timeLeft, setTimeLeft] = useState({ days: 0, hours: 0, minutes: 0, seconds: 0 });
   const [progress, setProgress] = useState(0);
   const [isValidDate, setIsValidDate] = useState(true);
+  
+  // --- 就地编辑日期状态 ---
+  const [isEditingDate, setIsEditingDate] = useState(false);
+  const [tempDate, setTempDate] = useState("");
+  const [savingDate, setSavingDate] = useState(false);
+
+  const today = new Date().toISOString().split('T')[0];
+
+  // 初始化临时日期
+  useEffect(() => {
+    if (profile?.departureDate) {
+      setTempDate(profile.departureDate);
+    }
+  }, [profile?.departureDate]);
 
   useEffect(() => {
     if (!profile?.departureDate) {
@@ -89,6 +104,33 @@ export default function PlatformBuyView({ onSuccess, onBack, profile, showAlert 
     return () => clearInterval(timer);
   }, [profile?.departureDate]);
 
+  // --- 保存就地编辑的日期 ---
+  const handleSaveInlineDate = async () => {
+    if (!profile) return;
+    if (!tempDate) return showAlert("Missing Date", "Please select a date first.");
+
+    const dateRegex = /^\d{4}-\d{2}-\d{2}$/;
+    if (!dateRegex.test(tempDate)) {
+      return showAlert("Invalid Format", "Please use the calendar selector.");
+    }
+
+    setSavingDate(true);
+    try {
+      await updateDoc(doc(db, "users", profile.uid), { 
+        departureDate: tempDate 
+      });
+      setIsEditingDate(false);
+      // 同步更新表单里的默认日期
+      setFormData(prev => ({ ...prev, moveOutDate: tempDate }));
+    } catch (error) {
+      console.error(error);
+      showAlert("Error", "Failed to update date.");
+    } finally {
+      setSavingDate(false);
+    }
+  };
+
+  // --- 监听当前用户的回收请求 ---
   useEffect(() => {
     if (!profile) return;
     
@@ -247,7 +289,6 @@ export default function PlatformBuyView({ onSuccess, onBack, profile, showAlert 
       <AnimatePresence mode="wait">
         {viewMode === "dashboard" ? (
           <motion.div key="dashboard" initial={{ opacity: 0, x: -20 }} animate={{ opacity: 1, x: 0 }} exit={{ opacity: 0, x: 20 }}>
-            {/* 降低了亮度的更柔和的橙色主题 (orange-400) */}
             <div className="bg-orange-400 text-white px-6 pt-12 pb-20 rounded-b-[40px] shadow-lg relative overflow-hidden">
               <div className="absolute right-0 top-0 opacity-[0.05] rotate-12">
                 <Clock className="w-48 h-48 text-white" />
@@ -266,15 +307,23 @@ export default function PlatformBuyView({ onSuccess, onBack, profile, showAlert 
                   </div>
                 </div>
 
-                {/* 背景毛玻璃加了一点点透明白色提亮 */}
                 <div className="bg-white/10 backdrop-blur-xl rounded-3xl p-6 border border-white/20 shadow-inner">
-                  <div className="flex items-center gap-2 mb-4">
-                    <CalendarClock className="w-4 h-4 text-white" />
-                    <span className="text-[10px] font-bold uppercase tracking-widest text-white/80">Time until departure</span>
-                  </div>
-                  
-                  {isValidDate ? (
+                  {isValidDate && !isEditingDate ? (
                     <>
+                      <div className="flex items-center justify-between mb-4">
+                        <div className="flex items-center gap-2">
+                          <CalendarClock className="w-4 h-4 text-white" />
+                          <span className="text-[10px] font-bold uppercase tracking-widest text-white/80">Time until departure</span>
+                        </div>
+                        <button 
+                          onClick={() => setIsEditingDate(true)}
+                          className="text-white/60 hover:text-white p-1 rounded-full hover:bg-white/10 transition-colors"
+                          title="Edit Move-out Date"
+                        >
+                          <Pencil className="w-4 h-4" />
+                        </button>
+                      </div>
+                      
                       <div className="flex justify-between items-end mb-4">
                         <div className="flex gap-4">
                           <div><p className="text-3xl font-black text-white">{timeLeft.days}</p><p className="text-[8px] uppercase text-white/70 font-bold tracking-widest mt-0.5">Days</p></div>
@@ -291,11 +340,46 @@ export default function PlatformBuyView({ onSuccess, onBack, profile, showAlert 
                       </div>
                     </>
                   ) : (
-                    <div className="bg-white/10 border border-white/20 rounded-xl p-3 flex items-start gap-3">
-                      <AlertCircle className="w-5 h-5 text-white/90 flex-shrink-0 mt-0.5" />
-                      <p className="text-xs text-white leading-relaxed font-medium">
-                        Your departure date is unset or invalid. Go to Profile and set it to activate the countdown.
+                    <div className="space-y-4">
+                      <div className="flex items-center gap-2 mb-2">
+                        <CalendarClock className="w-4 h-4 text-white" />
+                        <span className="text-[10px] font-bold uppercase tracking-widest text-white/90">
+                          {isValidDate ? "Update Move-out Date" : "Set Move-out Date"}
+                        </span>
+                      </div>
+                      <p className="text-xs text-white/80 leading-relaxed">
+                        Set your official move-out date to activate the countdown and help us coordinate logistics.
                       </p>
+                      <div className="flex flex-col sm:flex-row gap-3">
+                        <input 
+                          type="date"
+                          min={today}
+                          value={tempDate}
+                          onChange={(e) => setTempDate(e.target.value)}
+                          className="flex-1 bg-white/20 border border-white/30 rounded-xl px-4 py-3 text-sm text-white focus:outline-none focus:ring-2 focus:ring-white/50"
+                          style={{ colorScheme: 'dark' }} // 适配深色背景使日历图标变白
+                        />
+                        <div className="flex gap-2">
+                          <button 
+                            onClick={handleSaveInlineDate}
+                            disabled={savingDate}
+                            className="flex-1 sm:flex-none bg-white text-orange-500 px-6 py-3 rounded-xl font-bold text-sm shadow-md hover:bg-gray-50 transition-colors disabled:opacity-50"
+                          >
+                            {savingDate ? "Saving..." : "Save"}
+                          </button>
+                          {isValidDate && (
+                            <button 
+                              onClick={() => {
+                                setIsEditingDate(false);
+                                setTempDate(profile?.departureDate || "");
+                              }}
+                              className="px-4 py-3 text-white/80 hover:text-white text-sm font-bold transition-colors"
+                            >
+                              Cancel
+                            </button>
+                          )}
+                        </div>
+                      </div>
                     </div>
                   )}
                 </div>
@@ -405,7 +489,7 @@ export default function PlatformBuyView({ onSuccess, onBack, profile, showAlert 
                   </div>
                   <div className="space-y-1">
                     <label className="text-[10px] font-bold text-gray-400 uppercase tracking-widest flex items-center gap-1"><Calendar className="w-3 h-3" /> Move-out Date</label>
-                    <input required type="date" onKeyDown={(e) => e.preventDefault()} onClick={(e) => { if ('showPicker' in HTMLInputElement.prototype) { e.currentTarget.showPicker(); } }} className="w-full bg-gray-50 border-none rounded-xl px-4 py-3 text-sm focus:ring-2 focus:ring-orange-400/20 cursor-pointer" value={formData.moveOutDate} onChange={e => setFormData(prev => ({ ...prev, moveOutDate: e.target.value }))} />
+                    <input required type="date" min={today} className="w-full bg-gray-50 border-none rounded-xl px-4 py-3 text-sm focus:ring-2 focus:ring-orange-400/20" value={formData.moveOutDate} onChange={e => setFormData(prev => ({ ...prev, moveOutDate: e.target.value }))} />
                   </div>
                 </div>
                 <div className="space-y-1">
