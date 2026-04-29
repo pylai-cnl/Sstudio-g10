@@ -35,6 +35,12 @@ export default function ManageOrdersView({
   const [tab, setTab] = useState<"purchases" | "sales">("purchases");
   const [assigningId, setAssigningId] = useState<string | null>(null);
 
+  // 【新增】：用于发货模态框的状态
+  const [showShippingModal, setShowShippingModal] = useState(false);
+  const [shippingProductId, setShippingProductId] = useState<string | null>(null);
+  const [trackingInfo, setTrackingInfo] = useState("");
+  const [isSending, setIsSending] = useState(false);
+
   const myPurchases = products.filter(p => p.buyerId === currentUser?.uid);
   const mySales = products.filter(p => p.sellerId === currentUser?.uid && p.status !== "Still on");
 
@@ -47,41 +53,44 @@ export default function ManageOrdersView({
     }
   }, [mySales.length]);
 
-  const handleStatusUpdate = async (product: Product, newStatus: Product["status"]) => {
+  const handleStatusUpdate = async (product: Product, newStatus: Product["status"], extraData?: any) => {
     try {
       if (!currentUser) throw new Error("You must be logged in.");
+
+      // 允许上帝视角操作
+      const isSuperAdmin = currentUser.email === "relo@relo.com";
 
       await runTransaction(db, async (transaction) => {
         const productRef = doc(db, "products", product.id);
         const productSnap = await transaction.get(productRef);
 
-        if (!productSnap.exists()) {
-          throw new Error("Product not found.");
-        }
+        if (!productSnap.exists()) throw new Error("Product not found.");
 
         const latest = { id: product.id, ...productSnap.data() } as Product;
         const updates: Partial<Product> = {};
 
-        if (newStatus === "Delivered") {
-          if (latest.status !== "Pending" || latest.sellerId !== currentUser.uid) {
-            throw new Error("Only the seller can mark a pending order as delivered.");
+        // 【修改】：适配 Pending -> Shipped 的新逻辑
+        if (newStatus === "Shipped") {
+          if (latest.status !== "Pending" || (latest.sellerId !== currentUser.uid && !isSuperAdmin)) {
+            throw new Error("Only the seller can mark a pending order as sent.");
           }
-          updates.status = "Delivered";
-          updates.deliveredAt = new Date().toISOString();
+          updates.status = "Shipped";
+          updates.shippedAt = new Date().toISOString();
+          updates.trackingInfo = extraData?.trackingInfo || "No tracking provided";
         } else if (newStatus === "Completed") {
-          if (latest.status !== "Delivered" || latest.buyerId !== currentUser.uid) {
-            throw new Error("Only the buyer can complete a delivered order.");
+          if (!["Delivered", "Shipped"].includes(latest.status) || (latest.buyerId !== currentUser.uid && !isSuperAdmin)) {
+            throw new Error("Only the buyer can complete a shipped order.");
           }
           updates.status = "Completed";
           updates.completedAt = new Date().toISOString();
         } else if (newStatus === "Still on") {
-          if (!["Pending", "Delivered"].includes(latest.status) || latest.sellerId !== currentUser.uid) {
+          if (!["Pending", "Delivered", "Shipped"].includes(latest.status) || (latest.sellerId !== currentUser.uid && !isSuperAdmin)) {
             throw new Error("Only the seller can cancel this transaction.");
           }
           updates.status = "Still on";
           updates.buyerId = "";
           updates.buyerName = "";
-          updates.deliveredAt = "";
+          updates.shippedAt = "";
           updates.completedAt = "";
         } else {
           throw new Error("Unsupported status transition.");
@@ -90,19 +99,42 @@ export default function ManageOrdersView({
         transaction.update(productRef, updates as any);
       });
 
-      if (newStatus === "Delivered" && product.buyerId) {
+      // 发送系统消息
+      if (newStatus === "Shipped" && product.buyerId) {
         await onSendSystemMessage(
           product.id,
           product.sellerId,
           product.buyerId,
-          `The seller has delivered your item "${product.title}". Please check it.`
+          `Item sent! Tracking details: ${extraData?.trackingInfo || "None"}`
         );
       }
 
-      showAlert("Success", `Order status updated to ${newStatus}`);
+      if (newStatus !== "Shipped") {
+        showAlert("Success", `Order status updated to ${newStatus}`);
+      }
     } catch (error: any) {
       console.error("Update failed:", error);
       showAlert("Error", error?.message || "Failed to update order status.");
+      throw error;
+    }
+  };
+
+  const handleMarkShipped = async () => {
+    if (!shippingProductId) return;
+    const product = products.find(p => p.id === shippingProductId);
+    if (!product) return;
+    
+    setIsSending(true);
+    try {
+      await handleStatusUpdate(product, "Shipped", { trackingInfo: trackingInfo || "Hand-delivered" });
+      setShowShippingModal(false);
+      setTrackingInfo("");
+      showAlert("Success", "Item marked as sent.");
+    } catch (err) {
+      // 错误已由 handleStatusUpdate 处理
+    } finally {
+      setIsSending(false);
+      setShippingProductId(null);
     }
   };
 
@@ -113,7 +145,6 @@ export default function ManageOrdersView({
         buyerName,
         status: "Completed"
       });
-
       setAssigningId(null);
       showAlert("Success", "Buyer assigned successfully. They can now see this in their purchases.");
     } catch (error) {
@@ -126,7 +157,7 @@ export default function ManageOrdersView({
       initial={{ opacity: 0, x: 20 }}
       animate={{ opacity: 1, x: 0 }}
       exit={{ opacity: 0, x: -20 }}
-      className="flex flex-col h-full bg-white"
+      className="flex flex-col h-full bg-white relative"
     >
       <div className="p-4 border-b border-gray-100 flex items-center gap-4">
         <button onClick={onBack} className="p-2 hover:bg-gray-100 rounded-full transition-colors">
@@ -228,7 +259,8 @@ export default function ManageOrdersView({
               <div className="flex flex-col gap-2">
                 {tab === "purchases" && (
                   <>
-                    {product.status === "Delivered" && (
+                    {/* 买家：发货后可以确认收货 */}
+                    {product.status === "Shipped" && (
                       <button 
                         onClick={() => handleStatusUpdate(product, "Completed")}
                         className="w-full btn-primary py-2 text-xs flex items-center justify-center gap-2"
@@ -238,7 +270,7 @@ export default function ManageOrdersView({
                       </button>
                     )}
                     {product.status === "Pending" && (
-                      <p className="text-xs text-gray-400 italic py-2">Waiting for seller to deliver...</p>
+                      <p className="text-xs text-gray-400 italic py-2">Waiting for seller to send...</p>
                     )}
                     {(product.status === "Completed" || product.status === "Sold") && (
                       <p className="text-xs text-green-500 font-bold py-2 flex items-center gap-1">
@@ -250,25 +282,29 @@ export default function ManageOrdersView({
 
                 {tab === "sales" && (
                   <>
+                    {/* 卖家：Pending 状态下可以标记发货 */}
                     {product.status === "Pending" && (
                       <div className="flex gap-2">
                         <button 
-                          onClick={() => handleStatusUpdate(product, "Delivered")}
-                          className="flex-1 btn-primary py-2 text-xs flex items-center justify-center gap-2"
+                          onClick={() => {
+                            setShippingProductId(product.id);
+                            setShowShippingModal(true);
+                          }}
+                          className="flex-1 bg-yellow-500 text-white rounded-xl py-2 text-xs font-bold flex items-center justify-center gap-2 shadow-sm hover:bg-yellow-600 transition-all"
                         >
                           <Truck className="w-4 h-4" />
-                          Mark Delivered
+                          Mark as Sent
                         </button>
                         <button 
                           onClick={() => handleStatusUpdate(product, "Still on")}
-                          className="px-4 py-2 border border-red-100 text-red-500 rounded-xl text-xs hover:bg-red-50 transition-colors"
+                          className="px-4 py-2 border border-red-100 text-red-500 rounded-xl text-xs hover:bg-red-50 transition-colors font-bold"
                         >
                           Cancel
                         </button>
                       </div>
                     )}
-                    {product.status === "Delivered" && (
-                      <p className="text-xs text-gray-400 italic py-2">Waiting for buyer to confirm...</p>
+                    {product.status === "Shipped" && (
+                      <p className="text-xs text-gray-400 italic py-2">Waiting for buyer to confirm receipt...</p>
                     )}
                     {(product.status === "Completed" || product.status === "Sold") && !product.buyerId && (
                       <div className="space-y-2 pt-2 border-t border-gray-50">
@@ -321,6 +357,30 @@ export default function ManageOrdersView({
           </div>
         )}
       </div>
+
+      {/* 发货信息弹窗 */}
+      {showShippingModal && (
+        <div className="absolute inset-0 z-50 flex items-center justify-center p-4">
+           <div className="absolute inset-0 bg-black/40 backdrop-blur-sm" onClick={() => setShowShippingModal(false)} />
+           <div className="relative w-full max-w-sm bg-white rounded-3xl p-6 shadow-2xl">
+             <div className="w-12 h-12 bg-yellow-50 text-yellow-600 flex items-center justify-center rounded-full mb-4">
+               <Truck className="w-6 h-6" />
+             </div>
+             <h3 className="text-lg font-black text-gray-900 mb-1">Mark as Sent</h3>
+             <p className="text-xs text-gray-500 mb-4">Add tracking or meetup details for the buyer.</p>
+             <input 
+               className="input-field py-3 text-sm mb-6" 
+               placeholder="Tracking # or delivery note..." 
+               value={trackingInfo} 
+               onChange={e => setTrackingInfo(e.target.value)} 
+             />
+             <div className="flex gap-2">
+               <button onClick={() => setShowShippingModal(false)} className="flex-1 py-3 bg-gray-50 text-gray-500 rounded-xl font-bold text-xs hover:bg-gray-100">Cancel</button>
+               <button onClick={handleMarkShipped} disabled={isSending} className="flex-1 py-3 bg-yellow-500 text-white rounded-xl font-bold text-xs shadow-md shadow-yellow-500/20 hover:bg-yellow-600 disabled:opacity-50">Confirm</button>
+             </div>
+           </div>
+        </div>
+      )}
     </motion.div>
   );
 }

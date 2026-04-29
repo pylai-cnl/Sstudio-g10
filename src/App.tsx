@@ -34,16 +34,44 @@ import SellerShopView from "./views/SellerShopView";
 import PlatformBuyView from "./views/PlatformBuyView";
 import MoveInView from "./views/MoveInView";
 
-export enum OperationType { CREATE = 'create', UPDATE = 'update', DELETE = 'delete', LIST = 'list', GET = 'get', WRITE = 'write' }
-export interface FirestoreErrorInfo { error: string; operationType: OperationType; path: string | null; authInfo: any; }
+// --- Error Handling Logic ---
+export enum OperationType {
+  CREATE = 'create',
+  UPDATE = 'update',
+  DELETE = 'delete',
+  LIST = 'list',
+  GET = 'get',
+  WRITE = 'write',
+}
+
+export interface FirestoreErrorInfo {
+  error: string;
+  operationType: OperationType;
+  path: string | null;
+  authInfo: any;
+}
 
 export function handleFirestoreError(error: unknown, operationType: OperationType, path: string | null) {
-  const errInfo: FirestoreErrorInfo = { error: error instanceof Error ? error.message : String(error), authInfo: { userId: auth.currentUser?.uid, email: auth.currentUser?.email }, operationType, path };
+  const errInfo: FirestoreErrorInfo = {
+    error: error instanceof Error ? error.message : String(error),
+    authInfo: {
+      userId: auth.currentUser?.uid,
+      email: auth.currentUser?.email
+    },
+    operationType,
+    path
+  };
   console.error('Firestore Error: ', JSON.stringify(errInfo));
   throw new Error(JSON.stringify(errInfo));
 }
 
-export default function App() { return <ErrorBoundary><AppContent /></ErrorBoundary>; }
+export default function App() {
+  return (
+    <ErrorBoundary>
+      <AppContent />
+    </ErrorBoundary>
+  );
+}
 
 function AppContent() {
   const [user, setUser] = useState<FirebaseUser | null>(null);
@@ -55,8 +83,11 @@ function AppContent() {
   const [defaultAddrIndex, setDefaultAddrIndex] = useState(0);
   const [payments, setPayments] = useState<any[]>([]);
   const [defaultPayIndex, setDefaultPayIndex] = useState(0);
+  
+  // 统一的成功弹窗状态
   const [showSuccessModal, setShowSuccessModal] = useState(false);
   const [successMessage, setSuccessMessage] = useState("");
+
   const [products, setProducts] = useState<Product[]>([]);
   const [users, setUsers] = useState<Record<string, UserProfile>>({});
   const [searchQuery, setSearchQuery] = useState("");
@@ -67,7 +98,9 @@ function AppContent() {
   const [showSellOptions, setShowSellOptions] = useState(false);
   const [chatRooms, setChatRooms] = useState<ChatRoom[]>([]);
   const [loading, setLoading] = useState(true);
-  const [modalConfig, setModalConfig] = useState({ isOpen: false, title: "", message: "", onConfirm: () => {}, confirmText: "OK", type: "primary" as "primary" | "danger", isAlert: false });
+  const [modalConfig, setModalConfig] = useState({
+    isOpen: false, title: "", message: "", onConfirm: () => {}, confirmText: "OK", type: "primary" as "primary" | "danger", isAlert: false
+  });
 
   const showConfirm = (config: any) => setModalConfig({ ...config, isOpen: true, isAlert: false });
   const showAlert = (title: string, message: string) => setModalConfig({ isOpen: true, title, message, onConfirm: () => {}, confirmText: "OK", type: "primary", isAlert: true });
@@ -75,13 +108,16 @@ function AppContent() {
   const ensurePrivateProfileDoc = async (firebaseUser: FirebaseUser) => {
     const userPrivateDocRef = doc(db, "users_private", firebaseUser.uid);
     const userPrivateDoc = await getDoc(userPrivateDocRef);
-    if (!userPrivateDoc.exists()) await setDoc(userPrivateDocRef, { email: firebaseUser.email || "", favorites: [], cart: [] });
+    if (!userPrivateDoc.exists()) {
+      await setDoc(userPrivateDocRef, { email: firebaseUser.email || "", favorites: [], cart: [] });
+    }
     return userPrivateDocRef;
   };
 
   const updateProductStatusSafely = async (product: Product, nextStatus: Product["status"]) => {
     if (!user) throw new Error("You must be logged in.");
     
+    // 识别管理员身份
     const isSuperAdmin = user.email === "relo@relo.com";
 
     await runTransaction(db, async (transaction) => {
@@ -98,27 +134,36 @@ function AppContent() {
         updates.buyerId = user.uid;
         updates.buyerName = profile?.displayName || user.displayName || user.email?.split("@")[0] || "Buyer";
         updates.sellerNotified = false;
-      } else if (nextStatus === "Delivered") {
-        if (latest.status !== "Pending") throw new Error("Only pending orders can be marked as delivered.");
-        if (latest.sellerId !== user.uid && !isSuperAdmin) throw new Error("Only the seller can mark an item as delivered.");
+      } 
+      // 【新增】：支持从 Pending 转为 Shipped
+      else if (nextStatus === "Shipped") {
+        if (latest.status !== "Pending") throw new Error("Order must be pending to be shipped.");
+        if (latest.sellerId !== user.uid && !isSuperAdmin) throw new Error("Only the seller or admin can mark as shipped.");
+        updates.status = "Shipped";
+        updates.shippedAt = new Date().toISOString();
+      }
+      else if (nextStatus === "Delivered") {
+        if (!["Pending", "Shipped"].includes(latest.status)) throw new Error("Invalid status transition.");
+        if (latest.sellerId !== user.uid && !isSuperAdmin) throw new Error("Only the seller can mark as delivered.");
         updates.status = "Delivered";
         updates.deliveredAt = new Date().toISOString();
       } else if (nextStatus === "Completed") {
-        if (latest.status !== "Delivered") throw new Error("Only delivered orders can be completed.");
-        if (latest.buyerId !== user.uid && !isSuperAdmin) throw new Error("Only the buyer can complete this order.");
+        if (!["Delivered", "Shipped"].includes(latest.status)) throw new Error("Order not ready to be completed.");
+        if (latest.buyerId !== user.uid && !isSuperAdmin) throw new Error("Only the buyer or admin can complete this order.");
         updates.status = "Completed";
         updates.completedAt = new Date().toISOString();
       } else if (nextStatus === "Still on") {
-        if (!["Pending", "Delivered"].includes(latest.status)) throw new Error("This order cannot be reset to available.");
-        if (latest.sellerId !== user.uid && !isSuperAdmin) throw new Error("Only the seller can cancel this transaction.");
+        if (!["Pending", "Delivered", "Shipped"].includes(latest.status)) throw new Error("This order cannot be reset.");
+        if (latest.sellerId !== user.uid && !isSuperAdmin) throw new Error("Only the seller or admin can cancel.");
         updates.status = "Still on";
         updates.buyerId = "";
         updates.buyerName = "";
         updates.deliveredAt = "";
         updates.completedAt = "";
+        updates.shippedAt = "";
         updates.sellerNotified = true;
       } else if (nextStatus === "Sold") {
-        if (latest.sellerId !== user.uid && !isSuperAdmin) throw new Error("Only the seller can mark this item as sold.");
+        if (latest.sellerId !== user.uid && !isSuperAdmin) throw new Error("Only the seller can mark as sold.");
         updates.status = "Sold";
       }
       transaction.update(productRef, updates as any);
@@ -132,7 +177,6 @@ function AppContent() {
 
     const unsubscribe = onAuthStateChanged(auth, async (user) => {
       profileUnsubscribe?.(); privateUnsubscribe?.(); chatRoomsUnsubscribe?.();
-      profileUnsubscribe = null; privateUnsubscribe = null; chatRoomsUnsubscribe = null;
       setUser(user);
 
       if (user) {
@@ -143,7 +187,6 @@ function AppContent() {
           const [userDoc, userPrivateDoc] = await Promise.all([getDoc(userDocRef), getDoc(userPrivateDocRef)]);
           const email = user.email || "";
           const isStudent = email.toLowerCase().endsWith(".edu") || email.toLowerCase().endsWith(".ca");
-          
           const isAdmin = email.toLowerCase() === "relo@relo.com";
 
           if (!userDoc.exists()) {
@@ -154,13 +197,8 @@ function AppContent() {
           } else {
             const existingData = userDoc.data();
             const existingPrivateData = userPrivateDoc.data() || { email, favorites: [], cart: [] };
-            const updatesToPublic: any = {};
-            if (user.photoURL && existingData.photoURL !== user.photoURL) updatesToPublic.photoURL = user.photoURL;
-            if (existingData.isAdmin !== isAdmin) updatesToPublic.isAdmin = isAdmin; 
-            
-            if (Object.keys(updatesToPublic).length > 0) {
-              await updateDoc(userDocRef, updatesToPublic);
-            }
+            // 管理员身份强行覆盖
+            if (existingData.isAdmin !== isAdmin) await updateDoc(userDocRef, { isAdmin });
             setProfile({ uid: user.uid, ...existingData, ...existingPrivateData, isAdmin, ...(user.photoURL ? { photoURL: user.photoURL } : {}) } as UserProfile);
           }
 
@@ -198,9 +236,7 @@ function AppContent() {
   const handleViewChange = (newView: View) => {
     if (view === newView) return;
     if (isDirty) {
-      if (typeof showConfirm !== 'undefined') {
-        showConfirm({ title: "Unsaved Changes", message: "Discard unsaved changes?", confirmText: "Discard & Leave", type: "danger", onConfirm: () => { setIsDirty(false); setViewHistory(prev => [...prev, newView]); setView(newView); setShowSellOptions(false); window.scrollTo(0,0); }});
-      } else if (window.confirm("Discard unsaved changes?")) { setIsDirty(false); setViewHistory(prev => [...prev, newView]); setView(newView); setShowSellOptions(false); window.scrollTo(0,0); }
+      showConfirm({ title: "Unsaved Changes", message: "Discard unsaved changes?", confirmText: "Discard & Leave", type: "danger", onConfirm: () => { setIsDirty(false); setViewHistory(prev => [...prev, newView]); setView(newView); setShowSellOptions(false); window.scrollTo(0,0); }});
       return; 
     }
     setViewHistory(prev => prev[prev.length - 1] === newView ? prev : [...prev, newView]);
@@ -213,11 +249,10 @@ function AppContent() {
         if (prev.length <= 1) { setView("home"); return ["home"]; }
         const newHistory = [...prev]; newHistory.pop(); setView(newHistory[newHistory.length - 1]); return newHistory;
       });
-      setShowSellOptions(false); window.scrollTo(0, 0);
+      window.scrollTo(0, 0);
     };
     if (isDirty) {
-      if (typeof showConfirm !== 'undefined') showConfirm({ title: "Unsaved Changes", message: "Discard changes and go back?", confirmText: "Discard", type: "danger", onConfirm: () => { setIsDirty(false); perform(); }});
-      else if (window.confirm("Discard unsaved changes?")) { setIsDirty(false); perform(); }
+      showConfirm({ title: "Unsaved Changes", message: "Discard changes and go back?", confirmText: "Discard", type: "danger", onConfirm: () => { setIsDirty(false); perform(); }});
       return;
     }
     perform();
@@ -245,7 +280,9 @@ function AppContent() {
     if (!user || !profile) return;
     if ((profile.cart || []).includes(productId)) return showAlert("Already in Cart", "Item is already in cart.");
     await setDoc(doc(db, "users_private", user.uid), { email: user.email || "", cart: [...(profile.cart || []), productId] }, { merge: true });
-    setSuccessMessage("Item successfully added to your cart!");
+    
+    // 【修改】：加入购物车后显示绿勾勾
+    setSuccessMessage("Item added to your cart!");
     setShowSuccessModal(true);
   };
 
@@ -270,7 +307,8 @@ function AppContent() {
             await sendSystemMessage(p.id, p.sellerId, user.uid, `Your item "${p.title}" was purchased by ${profile.displayName}.`);
           }
           await updateDoc(doc(db, "users_private", user.uid), { cart: [] });
-          showAlert("Success!", "Orders placed. Sellers notified.");
+          setSuccessMessage("Orders placed successfully!");
+          setShowSuccessModal(true);
           handleViewChange("orders");
         } catch (error: any) { showAlert("Checkout Error", error.message || "Checkout failed."); }
       }
@@ -307,7 +345,7 @@ function AppContent() {
     if (Object.keys(publicUpdate).length) promises.push(updateDoc(doc(db, "users", user.uid), publicUpdate));
     if (Object.keys(privateUpdate).length) promises.push(setDoc(doc(db, "users_private", user.uid), { email: user.email || "", ...privateUpdate }, { merge: true }));
     await Promise.all(promises);
-    if (!silent) { setSuccessMessage("Profile updated successfully!"); setShowSuccessModal(true); }
+    if (!silent) { setSuccessMessage("Profile updated!"); setShowSuccessModal(true); }
     setIsDirty(false);
   };
 
@@ -342,7 +380,7 @@ function AppContent() {
                 {showSellOptions && (
                   <motion.div initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: 10 }} className="absolute top-full right-0 mt-2 w-48 bg-white rounded-2xl shadow-2xl border border-black/5 overflow-hidden z-[60]">
                     <button onClick={() => handleViewChange("sell")} className="w-full px-4 py-3 text-left hover:bg-gray-50 flex items-center gap-3"><PlusCircle className="w-5 h-5 text-primary" /><span className="text-sm font-bold">Add Item</span></button>
-                    {/* 【修复点】：在这里加入清空 selectedSellerId 的逻辑 */}
+                    {/* 修复点：My Shop 入口强制清空 selectedSellerId 以防看到别人的店铺 */}
                     <button onClick={() => { setSelectedSellerId(null); handleViewChange("seller_shop"); setShowSellOptions(false); }} className="w-full px-4 py-3 text-left hover:bg-gray-50 flex items-center gap-3 border-t border-gray-50"><Package className="w-5 h-5 text-primary" /><span className="text-sm font-bold">My Shop</span></button>
                   </motion.div>
                 )}
@@ -351,18 +389,6 @@ function AppContent() {
           </div>
         </div>
       </header>
-
-      <nav className="md:hidden bg-white px-4 py-3 flex items-center gap-3 border-b border-gray-100 sticky top-0 z-50">
-        <h1 onClick={() => handleViewChange("home")} className="text-primary font-black text-2xl tracking-tighter cursor-pointer">Relo</h1>
-        <div className="flex-1 relative">
-          <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400" />
-          <input type="text" placeholder="Search..." className="w-full bg-gray-100 rounded-full py-2 pl-10 pr-4 text-sm outline-none" value={searchQuery} onChange={e => setSearchQuery(e.target.value)} />
-        </div>
-        <button onClick={() => handleViewChange("cart")} className="relative p-2 text-gray-600">
-          <ShoppingCart className="w-6 h-6" />
-          {profile?.cart?.length ? <span className="absolute -top-1 -right-1 w-5 h-5 bg-primary text-white text-[10px] font-bold rounded-full flex items-center justify-center border-2 border-white">{profile.cart.length}</span> : null}
-        </button>
-      </nav>
 
       <main className="flex-1 overflow-y-auto pb-24 md:pb-10 hide-scrollbar">
         <div className="max-w-7xl mx-auto">
@@ -373,13 +399,15 @@ function AppContent() {
             {view === "sell" && <SellView key="sell" onSuccess={() => handleViewChange("home")} onBack={goBack} profile={profile} showAlert={showAlert} />}
             {view === "platform_buy" && <PlatformBuyView key="platform_buy" onSuccess={() => handleViewChange("home")} onBack={goBack} profile={profile} showAlert={showAlert} />}
             {view === "profile" && <ProfileView key="profile" profile={profile} products={products} users={users} onLogout={handleLogout} onSelectProduct={(p) => { setSelectedProduct(p); handleViewChange("detail"); }} favorites={profile?.favorites || []} onToggleFavorite={toggleFavorite} onManageOrders={() => handleViewChange("orders")} onUpdateProfile={updateProfile} setShowSuccessModal={setShowSuccessModal} showAlert={showAlert} onViewSellerShop={(sid) => { setSelectedSellerId(sid); handleViewChange("seller_shop"); }} setIsDirty={setIsDirty} showConfirm={showConfirm} addresses={addresses} setAddresses={setAddresses} defaultAddrIndex={defaultAddrIndex} setDefaultAddrIndex={setDefaultAddrIndex} payments={payments} setPayments={setPayments} defaultPayIndex={defaultPayIndex} setDefaultPayIndex={setDefaultPayIndex} />}
-            {view === "orders" && <ManageOrdersView key="orders" products={products} users={users} chatRooms={chatRooms} currentUser={user} onBack={goBack} onSelectProduct={(p) => { setSelectedProduct(p); handleViewChange("detail"); }} showAlert={showAlert} onSendSystemMessage={sendSystemMessage} onViewSellerShop={(sid) => { setSelectedSellerId(sid); handleViewChange("seller_shop"); }} />}
-            {view === "detail" && selectedProduct && <ProductDetailView key={`detail-${selectedProduct.id}`} product={selectedProduct} users={users} currentUser={user} sellerTransactionCount={products.filter(p => p.sellerId === selectedProduct.sellerId && (p.status === "Completed" || p.status === "Sold")).length} onViewSellerShop={(sid) => { setSelectedSellerId(sid); handleViewChange("seller_shop"); }} onBack={goBack} onStatusChange={async (id, status) => { try { await updateProductStatusSafely(selectedProduct, status); setSelectedProduct(prev => prev ? { ...prev, status } : null); showAlert("Success", `Status updated to ${status}`); } catch (error) { showAlert("Error", "Update failed."); } }} onDelete={async (id) => { showConfirm({ title: "Delete?", message: "Cannot be undone.", type: "danger", onConfirm: async () => { await deleteDoc(doc(db, "products", id)); setSelectedProduct(null); handleViewChange("home"); }}); }} onUpdate={async (id, data) => { await updateDoc(doc(db, "products", id), data); setSelectedProduct(prev => prev ? { ...prev, ...data } : null); }} onContactSeller={(p) => { if (p.sellerId !== user.uid) { const existing = chatRooms.find(r => r.productId === p.id && r.participants.includes(user.uid) && r.participants.includes(p.sellerId)); if (existing) { setSelectedChatRoom(existing); handleViewChange("chat_room"); } else { addDoc(collection(db, "chatRooms"), { participants: [user.uid, p.sellerId], productId: p.id, productTitle: p.title, productImage: p.images?.[0] || "", lastMessage: "Chat started", lastMessageAt: new Date().toISOString(), unreadBy: [p.sellerId] }).then(ref => { setSelectedChatRoom({ id: ref.id, participants: [user.uid, p.sellerId], productId: p.id, productTitle: p.title, productImage: p.images?.[0] || "" }); handleViewChange("chat_room"); }); } } else showAlert("Error", "Can't chat with yourself"); }} onAddToCart={(p) => addToCart(p.id)} isOwner={selectedProduct.sellerId === user.uid} showAlert={showAlert} isFavorite={profile?.favorites?.includes(selectedProduct.id) || false} onToggleFavorite={toggleFavorite} />}
+            
+            {/* 统一的订单管理页，强制刷新 key */}
+            {view === "orders" && <ManageOrdersView key={`orders-${user?.uid}`} products={products} users={users} chatRooms={chatRooms} currentUser={user} onBack={goBack} onSelectProduct={(p) => { setSelectedProduct(p); handleViewChange("detail"); }} showAlert={showAlert} onSendSystemMessage={sendSystemMessage} onViewSellerShop={(sid) => { setSelectedSellerId(sid); handleViewChange("seller_shop"); }} />}
+            
+            {view === "detail" && selectedProduct && <ProductDetailView key={`detail-${selectedProduct.id}`} product={selectedProduct} users={users} currentUser={user} sellerTransactionCount={products.filter(p => p.sellerId === selectedProduct.sellerId && (p.status === "Completed" || p.status === "Sold")).length} onViewSellerShop={(sid) => { setSelectedSellerId(sid); handleViewChange("seller_shop"); }} onBack={goBack} onStatusChange={async (id, status) => { try { await updateProductStatusSafely(selectedProduct, status); setSelectedProduct(prev => prev ? { ...prev, status } : null); } catch (error) { showAlert("Error", "Update failed."); } }} onDelete={async (id) => { showConfirm({ title: "Delete?", message: "Cannot be undone.", type: "danger", onConfirm: async () => { await deleteDoc(doc(db, "products", id)); setSelectedProduct(null); handleViewChange("home"); }}); }} onUpdate={async (id, data) => { await updateDoc(doc(db, "products", id), data); setSelectedProduct(prev => prev ? { ...prev, ...data } : null); }} onContactSeller={(p) => { if (p.sellerId !== user.uid) { const existing = chatRooms.find(r => r.productId === p.id && r.participants.includes(user.uid) && r.participants.includes(p.sellerId)); if (existing) { setSelectedChatRoom(existing); handleViewChange("chat_room"); } else { addDoc(collection(db, "chatRooms"), { participants: [user.uid, p.sellerId], productId: p.id, productTitle: p.title, productImage: p.images?.[0] || "", lastMessage: "Chat started", lastMessageAt: new Date().toISOString(), unreadBy: [p.sellerId] }).then(ref => { setSelectedChatRoom({ id: ref.id, participants: [user.uid, p.sellerId], productId: p.id, productTitle: p.title, productImage: p.images?.[0] || "" }); handleViewChange("chat_room"); }); } } else showAlert("Error", "Can't chat with yourself"); }} onAddToCart={(p) => addToCart(p.id)} isOwner={selectedProduct.sellerId === user.uid} showAlert={showAlert} isFavorite={profile?.favorites?.includes(selectedProduct.id) || false} onToggleFavorite={toggleFavorite} />}
             {view === "chat" && <UnifiedMessagesView key="chat" rooms={chatRooms} onSelectRoom={(r) => setSelectedChatRoom(r)} selectedRoom={selectedChatRoom} currentUser={user} profile={profile} users={users} onViewSellerShop={(sid) => { setSelectedSellerId(sid); handleViewChange("seller_shop"); }} products={products} onSelectProduct={(p) => { setSelectedProduct(p); handleViewChange("detail"); }} />}
             {view === "chat_room" && selectedChatRoom && <UnifiedMessagesView key="chat_room" rooms={chatRooms} onSelectRoom={(r) => setSelectedChatRoom(r)} selectedRoom={selectedChatRoom} currentUser={user} profile={profile} users={users} onViewSellerShop={(sid) => { setSelectedSellerId(sid); handleViewChange("seller_shop"); }} products={products} onSelectProduct={(p) => { setSelectedProduct(p); handleViewChange("detail"); }} />}
             {view === "favorites" && <FavoritesView key="favorites" products={products.filter(p => profile?.favorites?.includes(p.id))} users={users} onSelectProduct={(p) => { setSelectedProduct(p); handleViewChange("detail"); }} favorites={profile?.favorites || []} onToggleFavorite={toggleFavorite} onViewSellerShop={(sid) => { setSelectedSellerId(sid); handleViewChange("seller_shop"); }} />}
             {view === "settings" && <SettingsView key="settings" currentUser={user!} profile={profile} onSave={updateProfile} onBack={goBack} />}
-            {/* 【修复点】：加入动态 key 强迫刷新页面 */}
             {view === "seller_shop" && <SellerShopView key={`seller_shop-${selectedSellerId || user.uid}`} sellerProfile={selectedSellerId ? users[selectedSellerId] : profile} products={products.filter(p => p.sellerId === (selectedSellerId || user.uid))} onSelectProduct={(p) => { setSelectedProduct(p); handleViewChange("detail"); }} onBack={goBack} isOwnShop={!selectedSellerId || selectedSellerId === user.uid} onUpdateProfile={updateProfile} />}
           </AnimatePresence>
         </div>
@@ -403,7 +431,6 @@ function AppContent() {
                 <button onClick={() => handleViewChange("sell")} className="flex flex-col items-center gap-3 p-4 bg-gray-50 rounded-2xl hover:bg-gray-100"><PlusCircle className="w-6 h-6 text-primary" /><span className="text-sm font-bold text-gray-700">Add Item</span></button>
                 <button onClick={() => handleViewChange("move_in")} className="flex flex-col items-center gap-3 p-4 bg-purple-50 border border-purple-100 rounded-2xl hover:bg-purple-100"><Sparkles className="w-6 h-6 text-purple-500" /><span className="text-sm font-bold text-purple-700">Smart Move-In</span></button>
                 <button onClick={() => handleViewChange("platform_buy")} className="flex flex-col items-center gap-3 p-4 bg-orange-50 border border-orange-100 rounded-2xl hover:bg-orange-100"><Store className="w-6 h-6 text-orange-500" /><span className="text-sm font-bold text-orange-700">Sell to Relo</span></button>
-                {/* 【修复点】：手机端也同样修改 */}
                 <button onClick={() => { setSelectedSellerId(null); handleViewChange("seller_shop"); setShowSellOptions(false); }} className="flex flex-col items-center gap-3 p-4 bg-gray-50 rounded-2xl hover:bg-gray-100"><Package className="w-6 h-6 text-primary" /><span className="text-sm font-bold text-gray-700">My Shop</span></button>
               </div>
             </motion.div>
@@ -421,11 +448,11 @@ function AppContent() {
               <div className="w-20 h-20 bg-green-50 rounded-full flex items-center justify-center mx-auto mb-6"><CheckCircle className="w-8 h-8 text-green-500" /></div>
               <h3 className="text-2xl font-bold mb-2">Success</h3>
               {successMessage && <p className="text-sm text-gray-500 mb-2 font-medium">{successMessage}</p>}
-              <button onClick={() => setShowSuccessModal(false)} className="w-full py-4 bg-primary text-white font-bold rounded-2xl hover:bg-primary-hover mt-4 transition-colors">OK</button>
+              <button onClick={() => setShowSuccessModal(false)} className="w-full py-4 bg-primary text-white font-bold rounded-2xl hover:bg-primary-hover mt-4">OK</button>
             </motion.div>
           </div>
         )}
       </AnimatePresence>
     </div>
   );
-} 
+}

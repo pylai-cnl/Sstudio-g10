@@ -5,7 +5,6 @@ import {
   CreditCard, Camera, Pencil, ShieldCheck, ChevronRight, LogOut, Gift, Key
 } from "lucide-react";
 import { ref, uploadBytes, getDownloadURL } from "firebase/storage";
-// NEW: 引入调用云函数的包
 import { httpsCallable } from "firebase/functions";
 import { storage, functions } from "../firebase";
 import { Product, UserProfile } from "../types";
@@ -62,11 +61,10 @@ export default function ProfileView({
   defaultPayIndex = 0,
   setDefaultPayIndex = () => {}
 }: ProfileViewProps) {
-  const [activeSubView, setActiveSubView] = useState<"main" | "orders" | "wishlist" | "favorites" | "address" | "payment">("main");
+  const [activeSubView, setActiveSubView] = useState<"main" | "wishlist" | "favorites" | "address" | "payment">("main");
   const [showLogoutModal, setShowLogoutModal] = useState(false);
   const [showEditModal, setShowEditModal] = useState(false);
   
-  // Promo Code Modal States
   const [showPromoModal, setShowPromoModal] = useState(false);
   const [promoCode, setPromoCode] = useState("");
   const [promoError, setPromoError] = useState("");
@@ -138,25 +136,17 @@ export default function ProfileView({
     setShowEditModal(false);
   };
 
-  // 【核心修改】：现在完全通过后端云函数来验证 Promo Code
   const handleRedeemPromo = async () => {
     setPromoError("");
     setIsRedeeming(true);
-
     try {
-      // 1. 声明我们要调用的后端函数名称 "redeemPromoCode"
       const redeemPromoCodeFn = httpsCallable(functions, 'redeemPromoCode');
-      
-      // 2. 将输入的兑换码发送给后端，剩下的全交给后端处理
-      const result = await redeemPromoCodeFn({ code: promoCode.trim().toUpperCase() });
-      
-      // 3. 如果后端没有报错，说明提权成功，更新 UI
+      await redeemPromoCodeFn({ code: promoCode.trim().toUpperCase() });
       setShowPromoModal(false);
       setPromoCode("");
       showAlert("Admin Activated 🚀", "Backend verified your code. You now have Enterprise Admin privileges.");
     } catch (error: any) {
       console.error("Promo code error:", error);
-      // 捕获后端的报错信息并显示给用户
       setPromoError(error.message || "Invalid or expired promo code.");
     } finally {
       setIsRedeeming(false);
@@ -165,62 +155,7 @@ export default function ProfileView({
 
   const campusTransactions = (profile?.salesCount || 0) + (profile?.purchasesCount || 0);
 
-  if (activeSubView === "orders") {
-    const mySales = products.filter(p => p.sellerId === profile?.uid);
-    const myPurchases = products.filter(p => p.buyerId === profile?.uid);
-    return (
-      <motion.div 
-        initial={{ opacity: 0, x: 20 }}
-        animate={{ opacity: 1, x: 0 }}
-        exit={{ opacity: 0, x: -20 }}
-        className="min-h-screen bg-bg-light"
-        id="ordersView"
-      >
-        <header className="sticky top-0 z-40 bg-white border-b border-gray-100 px-6 py-4 flex items-center gap-4">
-          <button onClick={() => setActiveSubView("main")} className="p-2 -ml-2 text-gray-400 hover:text-text-dark transition-colors">
-            <ArrowLeft className="w-5 h-5" />
-          </button>
-          <h1 className="text-lg font-bold text-text-dark">Manage My Orders</h1>
-        </header>
-        <div className="max-w-[650px] mx-auto p-4 space-y-8">
-          <section>
-            <h2 className="text-sm font-bold text-gray-400 uppercase tracking-widest mb-4">My Sales</h2>
-            <div className="grid grid-cols-2 gap-4">
-              {mySales.map(product => (
-                <ProductCard 
-                  key={product.id} 
-                  product={product} 
-                  users={users}
-                  onClick={() => onSelectProduct(product)}
-                  isFavorite={favorites.includes(product.id)}
-                  onToggleFavorite={onToggleFavorite}
-                  onViewSellerShop={onViewSellerShop}
-                />
-              ))}
-              {mySales.length === 0 && <p className="col-span-2 text-center text-gray-400 py-8">No active sales.</p>}
-            </div>
-          </section>
-          <section>
-            <h2 className="text-sm font-bold text-gray-400 uppercase tracking-widest mb-4">My Purchases</h2>
-            <div className="grid grid-cols-2 gap-4">
-              {myPurchases.map(product => (
-                <ProductCard 
-                  key={product.id} 
-                  product={product} 
-                  users={users}
-                  onClick={() => onSelectProduct(product)}
-                  isFavorite={favorites.includes(product.id)}
-                  onToggleFavorite={onToggleFavorite}
-                  onViewSellerShop={onViewSellerShop}
-                />
-              ))}
-              {myPurchases.length === 0 && <p className="col-span-2 text-center text-gray-400 py-8">No purchase history.</p>}
-            </div>
-          </section>
-        </div>
-      </motion.div>
-    );
-  }
+  // 【核心修改】：彻底移除了 if (activeSubView === "orders") 这个假页面的渲染逻辑
 
   if (activeSubView === "wishlist") {
     return (
@@ -601,8 +536,9 @@ export default function ProfileView({
           </div>
         </div>
 
+        {/* 【核心修改】：这个按钮现在正确地指向了全局唯一的 orders 页面 */}
         <button 
-          onClick={() => setActiveSubView("orders")}
+          onClick={onManageOrders}
           className="w-full bg-primary p-6 rounded-3xl flex items-center justify-between group hover:bg-primary-hover transition-all shadow-lg shadow-primary/20"
         >
           <div className="text-left">
@@ -711,6 +647,7 @@ export default function ProfileView({
         </button>
       </div>
 
+      {/* Edit Profile Modal */}
       <AnimatePresence>
         {showEditModal && (
           <div className="fixed inset-0 z-[100] flex items-center justify-center p-4">
