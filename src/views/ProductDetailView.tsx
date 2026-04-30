@@ -42,7 +42,6 @@ export default function ProductDetailView({
   const sellerName = seller?.displayName || product.sellerName;
   const sellerIsStudent = seller?.isStudent ?? product.sellerIsStudent;
 
-  // 【彻底修复的拦截逻辑】：通过字典查找当前用户的权限，完全消除 TS 报错
   const currUserProfile = currentUser ? users[currentUser.uid] : null;
   const isSuperAdmin = currentUser?.email === "relo@relo.com" || currUserProfile?.isAdmin;
   
@@ -58,7 +57,6 @@ export default function ProductDetailView({
   });
   const [isSaving, setIsSaving] = useState(false);
 
-  // 发货 Modal 状态
   const [showShippingModal, setShowShippingModal] = useState(false);
   const [trackingInfo, setTrackingInfo] = useState("");
 
@@ -79,7 +77,6 @@ export default function ProductDetailView({
     }
   };
 
-  // 【新增】：详情页里的独立发货逻辑
   const handleMarkShipped = async () => {
     setIsSaving(true);
     try {
@@ -112,8 +109,30 @@ export default function ProductDetailView({
       </div>
 
       <div className="grid grid-cols-1 md:grid-cols-2 gap-8 pt-2">
-        <div className="aspect-square bg-gray-100 relative md:rounded-2xl md:overflow-hidden md:m-6">
-          {product.images?.[activeImage] ? <img src={product.images[activeImage]} className="w-full h-full object-cover" alt="item" /> : <div className="w-full h-full flex items-center justify-center text-gray-300"><Camera className="w-12 h-12" /></div>}
+        {/* 【核心修复】：使用 w-full pt-[100%] 和 absolute inset-0 彻底封死图片的拉伸 */}
+        <div className="w-full relative pt-[100%] bg-gray-100 md:rounded-2xl overflow-hidden md:m-6">
+          {product.images?.[activeImage] ? (
+            <img 
+              src={product.images[activeImage]} 
+              className="absolute inset-0 w-full h-full object-cover" 
+              alt="item" 
+            />
+          ) : (
+            <div className="absolute inset-0 flex items-center justify-center text-gray-300">
+              <Camera className="w-12 h-12" />
+            </div>
+          )}
+          {product.images?.length > 1 && (
+            <div className="absolute bottom-4 left-0 right-0 flex justify-center gap-2 z-10">
+              {product.images.map((_, i) => (
+                <button 
+                  key={i} 
+                  onClick={() => setActiveImage(i)} 
+                  className={cn("w-2 h-2 rounded-full transition-all shadow-sm", activeImage === i ? "bg-primary w-4" : "bg-white/70 hover:bg-white")} 
+                />
+              ))}
+            </div>
+          )}
         </div>
 
         <div className="p-6 space-y-6">
@@ -174,7 +193,6 @@ export default function ProductDetailView({
             <div className="text-right"><p className="text-primary font-black text-lg">{sellerTransactionCount}</p><p className="text-[10px] text-gray-400 font-bold uppercase">Sales</p></div>
           </div>
 
-          {/* 控制面板：卖家的发货区域 */}
           {(isOwner || isSuperAdmin) && (
             <div className="pt-6 space-y-3">
               {product.status === "Still on" && (
@@ -186,7 +204,6 @@ export default function ProductDetailView({
                   <div className="flex items-center gap-2"><Clock className="w-5 h-5 text-yellow-600" /><h4 className="font-bold text-yellow-800">Order Pending</h4></div>
                   <p className="text-xs text-yellow-700 leading-relaxed">This item was purchased. You need to deliver it to the buyer and mark it as sent.</p>
                   
-                  {/* 【新增】：直接在这里唤出发货弹窗 */}
                   <button 
                     onClick={() => setShowShippingModal(true)} 
                     className="w-full bg-yellow-500 text-white py-3.5 rounded-xl font-bold flex items-center justify-center gap-2 hover:bg-yellow-600 shadow-lg shadow-yellow-500/20"
@@ -229,7 +246,6 @@ export default function ProductDetailView({
         </div>
       </div>
 
-      {/* 发货信息 Modal */}
       {showShippingModal && (
         <div className="fixed inset-0 z-[100] flex items-center justify-center p-4">
            <div className="absolute inset-0 bg-black/60 backdrop-blur-sm" onClick={() => setShowShippingModal(false)} />

@@ -14,7 +14,14 @@ export interface ProductCardProps {
   onViewSellerShop: (sellerId: string) => void;
 }
 
-export default function ProductCard({ product, users, onClick, isFavorite, onToggleFavorite, onViewSellerShop }: ProductCardProps) {
+export default function ProductCard({ 
+  product, 
+  users, 
+  onClick, 
+  isFavorite, 
+  onToggleFavorite, 
+  onViewSellerShop 
+}: ProductCardProps) {
   const seller = users[product.sellerId];
   const sellerAvatar = seller?.photoURL || `https://api.dicebear.com/7.x/avataaars/svg?seed=${product.sellerId}`;
   const sellerIsStudent = seller?.isStudent ?? product.sellerIsStudent;
@@ -22,21 +29,32 @@ export default function ProductCard({ product, users, onClick, isFavorite, onTog
   return (
     <motion.div 
       whileTap={{ scale: 0.98 }}
-      className="product-card card flex flex-col h-full cursor-pointer relative group"
+      className="product-card card flex flex-col h-full cursor-pointer relative group overflow-hidden"
     >
-      <div className="aspect-square relative bg-gray-100" onClick={onClick}>
+      {/* 【核心防爆走装甲】：w-full + pt-[100%] 锁死完美的 1:1 比例框架 */}
+      <div className="w-full relative pt-[100%] bg-gray-100" onClick={onClick}>
+        
+        {/* 图片使用 absolute inset-0 完全贴合框架，多余部分裁剪 */}
         {product.images?.[0] ? (
-          <img src={product.images[0]} className="w-full h-full object-cover" alt={product.title} />
+          <img 
+            src={product.images[0]} 
+            className="absolute inset-0 w-full h-full object-cover transition-transform duration-700 group-hover:scale-105" 
+            alt={product.title} 
+          />
         ) : (
-          <div className="w-full h-full flex items-center justify-center text-gray-300">
+          <div className="absolute inset-0 flex items-center justify-center text-gray-300">
             <Camera className="w-8 h-8" />
           </div>
         )}
-        <div className="absolute top-2 left-2 bg-white/90 backdrop-blur px-2 py-1 rounded-lg text-[10px] font-bold text-gray-600 shadow-sm">
+
+        {/* Condition 标签 (z-10 保证不被图片盖住) */}
+        <div className="absolute top-2 left-2 bg-white/90 backdrop-blur px-2 py-1 rounded-lg text-[10px] font-bold text-gray-600 shadow-sm z-10">
           {product.condition}
         </div>
+
+        {/* 售出/锁定 遮罩 (z-20 保证盖住图片和 Condition 标签) */}
         {product.status !== "Still on" && (
-          <div className="absolute inset-0 bg-black/40 backdrop-blur-[1px] flex items-center justify-center">
+          <div className="absolute inset-0 bg-black/40 backdrop-blur-[1px] flex items-center justify-center z-20">
             <span className="bg-white text-black font-black px-4 py-1.5 rounded-full text-[10px] uppercase tracking-widest shadow-xl">
               {product.status === "Pending" ? "Pending" : "Sold Out"}
             </span>
@@ -44,12 +62,13 @@ export default function ProductCard({ product, users, onClick, isFavorite, onTog
         )}
       </div>
       
+      {/* 收藏心形按钮 (z-30 拥有最高层级，随时可以点击) */}
       <button 
         onClick={(e) => {
           e.stopPropagation();
           onToggleFavorite(product.id);
         }}
-        className="absolute top-2 right-2 p-2 bg-white/80 backdrop-blur rounded-full shadow-sm hover:bg-white transition-all z-10"
+        className="absolute top-2 right-2 p-2 bg-white/80 backdrop-blur rounded-full shadow-sm hover:bg-white transition-all z-30"
       >
         <HeartIcon className={cn("w-4 h-4 transition-colors", isFavorite ? "fill-red-500 text-red-500" : "text-gray-400")} />
       </button>

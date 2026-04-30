@@ -5,7 +5,7 @@ import { Product } from "../types";
 import { cn } from "../utils/classNames";
 
 export interface MoveInViewProps {
-  key?: string; // 【修复点】：显式声明 key 属性，彻底堵住 TS 的报错
+  key?: string;
   products: Product[];
   onAddToCart: (product: Product) => void;
   onProductClick: (product: Product) => void;
@@ -53,7 +53,6 @@ export default function MoveInView({ products, onAddToCart, onProductClick, cart
       exit={{ opacity: 0, y: -20 }}
       className="max-w-4xl mx-auto px-4 py-8 pb-32"
     >
-      {/* 【视觉更新】：告别刺眼的亮橙色，改用极其柔和的高级奶油暖橙色 (bg-orange-50) */}
       <div className="bg-orange-50 border border-orange-100/50 rounded-[40px] p-8 md:p-12 shadow-sm relative overflow-hidden mb-12">
         <div className="absolute right-0 top-0 opacity-[0.03] rotate-12 translate-x-6 -translate-y-6">
           <PackageOpen className="w-72 h-72 text-orange-900" />
@@ -149,12 +148,17 @@ export default function MoveInView({ products, onAddToCart, onProductClick, cart
               const inCart = cartItems.includes(product.id);
               return (
                 <div key={product.id} className="bg-white rounded-[32px] p-4 border border-gray-100 shadow-sm hover:shadow-xl hover:shadow-orange-500/5 transition-all group flex flex-col">
+                  {/* 【核心修复】：剥夺图片主动撑破布局的能力，强行锁定比例 */}
                   <div 
-                    className="aspect-square rounded-[24px] overflow-hidden bg-gray-50 mb-4 cursor-pointer relative"
+                    className="w-full relative pt-[100%] rounded-[24px] overflow-hidden bg-gray-50 mb-4 cursor-pointer"
                     onClick={() => onProductClick(product)}
                   >
-                    <img src={product.images[0]} alt={product.title} className="w-full h-full object-cover group-hover:scale-110 transition-transform duration-700" />
-                    <div className="absolute top-3 right-3 bg-white/90 backdrop-blur-md px-2 py-1 rounded-lg text-[10px] font-black text-gray-900 shadow-sm">
+                    <img 
+                      src={product.images[0]} 
+                      alt={product.title} 
+                      className="absolute inset-0 w-full h-full object-cover group-hover:scale-110 transition-transform duration-700" 
+                    />
+                    <div className="absolute top-3 right-3 bg-white/90 backdrop-blur-md px-2 py-1 rounded-lg text-[10px] font-black text-gray-900 shadow-sm z-10">
                       {product.condition}
                     </div>
                   </div>
