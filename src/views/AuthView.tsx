@@ -1,6 +1,7 @@
 import React, { useState } from "react";
-import { motion } from "motion/react";
-import { createUserWithEmailAndPassword, signInWithEmailAndPassword } from "firebase/auth";
+import { motion, AnimatePresence } from "motion/react";
+import { Package, ArrowRight, ShieldCheck, Mail, Lock } from "lucide-react";
+import { signInWithEmailAndPassword } from "firebase/auth";
 import { auth } from "../firebase";
 
 export interface AuthViewProps {
@@ -8,108 +9,147 @@ export interface AuthViewProps {
 }
 
 export default function AuthView({ onLogin }: AuthViewProps) {
-  const [isSignUp, setIsSignUp] = useState(false);
+  const [showAdminPortal, setShowAdminPortal] = useState(false);
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
 
-  const handleEmailAuth = async (e: React.FormEvent) => {
+  // 处理管理员的账号密码登录
+  const handleAdminLogin = async (e: React.FormEvent) => {
     e.preventDefault();
     setError("");
     setLoading(true);
+
     try {
-      if (isSignUp) {
-        await createUserWithEmailAndPassword(auth, email, password);
-      } else {
-        await signInWithEmailAndPassword(auth, email, password);
-      }
+      // 成功登录后，App.tsx 里的 onAuthStateChanged 会自动接管，不需要额外传参
+      await signInWithEmailAndPassword(auth, email, password);
     } catch (err: any) {
-      if (err.code === "auth/operation-not-allowed") {
-        setError("Email/Password login is not enabled in Firebase Console. Please enable it in Authentication > Sign-in method.");
-      } else if (err.code === "auth/email-already-in-use") {
-        setError("This email is already registered. Please login instead.");
-      } else if (err.code === "auth/weak-password") {
-        setError("Password should be at least 6 characters.");
-      } else {
-        setError(err.message);
-      }
-    } finally {
+      console.error(err);
+      setError("Invalid admin credentials.");
       setLoading(false);
     }
   };
 
   return (
-    <div className="h-screen flex flex-col items-center justify-center bg-white px-8 text-center overflow-y-auto py-10">
+    <div className="min-h-screen bg-gray-50 flex items-center justify-center p-4 relative overflow-hidden">
+      {/* Background decorations */}
+      <div className="absolute top-0 left-0 w-full h-96 bg-primary/10 -skew-y-6 transform origin-top-left -translate-y-20 z-0" />
+      <div className="absolute bottom-0 right-0 w-96 h-96 bg-orange-400/10 rounded-full blur-3xl z-0 translate-x-20 translate-y-20" />
+
       <motion.div 
         initial={{ opacity: 0, y: 20 }}
         animate={{ opacity: 1, y: 0 }}
-        className="mb-8"
+        className="w-full max-w-[400px] relative z-10"
       >
-        <h1 className="text-primary text-6xl font-black tracking-tighter mb-2">Relo</h1>
-        <p className="text-gray-500 font-medium">Cornell Tech Campus Marketplace</p>
-      </motion.div>
-      
-      <div className="w-full max-w-xs space-y-4">
-        <form onSubmit={handleEmailAuth} className="space-y-3">
-          <div className="text-left">
-            <label className="text-[10px] font-bold text-gray-400 uppercase px-2 mb-1 block">University Email</label>
-            <input 
-              type="email" 
-              placeholder="name@cornell.edu" 
-              className="input-field"
-              value={email}
-              onChange={(e) => setEmail(e.target.value)}
-              required
-            />
-            <p className="text-[9px] text-gray-400 px-2 mt-1 italic">Use .edu or .ca for student verification</p>
+        <div className="bg-white rounded-[40px] shadow-2xl p-8 md:p-10 border border-gray-100 overflow-hidden">
+          
+          {/* Logo & Brand */}
+          <div className="flex flex-col items-center mb-10">
+            <div className="w-20 h-20 bg-orange-50 text-primary rounded-[24px] flex items-center justify-center mb-6 rotate-3 shadow-sm border border-orange-100">
+              <Package className="w-10 h-10 -rotate-3" />
+            </div>
+            <h1 className="text-4xl font-black text-gray-900 tracking-tighter mb-2">Relo</h1>
+            <p className="text-gray-500 font-medium text-center text-sm">
+              The smartest way to move in and out of your campus.
+            </p>
           </div>
-          <div className="text-left">
-            <label className="text-[10px] font-bold text-gray-400 uppercase px-2 mb-1 block">Password</label>
-            <input 
-              type="password" 
-              placeholder="Min. 6 characters" 
-              className="input-field"
-              value={password}
-              onChange={(e) => setPassword(e.target.value)}
-              required
-            />
-          </div>
-          {error && <p className="text-red-500 text-xs text-left px-2">{error}</p>}
-          <button 
-            type="submit"
-            disabled={loading}
-            className="w-full bg-primary text-white font-bold py-4 rounded-2xl shadow-lg shadow-primary/20 hover:bg-primary-hover transition-all disabled:opacity-50"
-          >
-            {loading ? "Processing..." : (isSignUp ? "Sign Up" : "Login")}
-          </button>
-        </form>
 
-        <div className="flex items-center gap-2 py-2">
-          <div className="flex-1 h-px bg-gray-100" />
-          <span className="text-gray-400 text-xs font-bold uppercase">OR</span>
-          <div className="flex-1 h-px bg-gray-100" />
+          <AnimatePresence mode="wait">
+            {!showAdminPortal ? (
+              <motion.div 
+                key="student-login"
+                initial={{ opacity: 0, x: -20 }}
+                animate={{ opacity: 1, x: 0 }}
+                exit={{ opacity: 0, x: 20 }}
+                className="space-y-6"
+              >
+                {/* 正常的学生 Google 登录 */}
+                <button 
+                  onClick={onLogin}
+                  className="w-full bg-primary text-white rounded-2xl py-4 font-bold text-lg flex items-center justify-center gap-3 shadow-lg shadow-primary/20 hover:bg-primary-hover active:scale-95 transition-all group"
+                >
+                  Continue with Google
+                  <ArrowRight className="w-5 h-5 group-hover:translate-x-1 transition-transform" />
+                </button>
+
+                <div className="bg-gray-50 p-4 rounded-2xl text-center border border-gray-100">
+                  <p className="text-xs text-gray-500 font-medium">
+                    Use your <span className="font-bold text-gray-700">.edu</span> email to automatically get verified student status.
+                  </p>
+                </div>
+              </motion.div>
+            ) : (
+              <motion.form 
+                key="admin-login"
+                initial={{ opacity: 0, x: 20 }}
+                animate={{ opacity: 1, x: 0 }}
+                exit={{ opacity: 0, x: -20 }}
+                onSubmit={handleAdminLogin}
+                className="space-y-4"
+              >
+                <div className="flex items-center justify-center gap-2 mb-6">
+                  <ShieldCheck className="w-5 h-5 text-orange-500" />
+                  <h3 className="font-black text-gray-900 uppercase tracking-widest">Admin Portal</h3>
+                </div>
+
+                {error && (
+                  <div className="bg-red-50 text-red-500 text-xs font-bold p-3 rounded-xl text-center border border-red-100">
+                    {error}
+                  </div>
+                )}
+
+                <div className="space-y-3">
+                  <div className="relative">
+                    <Mail className="absolute left-4 top-1/2 -translate-y-1/2 w-5 h-5 text-gray-400" />
+                    <input 
+                      type="email" 
+                      required
+                      placeholder="Admin Email" 
+                      className="w-full bg-gray-50 border border-gray-100 rounded-xl py-3.5 pl-12 pr-4 text-sm font-medium focus:ring-2 focus:ring-orange-500/20 focus:outline-none transition-all"
+                      value={email}
+                      onChange={e => setEmail(e.target.value)}
+                    />
+                  </div>
+                  <div className="relative">
+                    <Lock className="absolute left-4 top-1/2 -translate-y-1/2 w-5 h-5 text-gray-400" />
+                    <input 
+                      type="password" 
+                      required
+                      placeholder="Password" 
+                      className="w-full bg-gray-50 border border-gray-100 rounded-xl py-3.5 pl-12 pr-4 text-sm font-medium focus:ring-2 focus:ring-orange-500/20 focus:outline-none transition-all"
+                      value={password}
+                      onChange={e => setPassword(e.target.value)}
+                    />
+                  </div>
+                </div>
+
+                <button 
+                  type="submit"
+                  disabled={loading}
+                  className="w-full bg-gray-900 text-white rounded-xl py-3.5 font-bold text-sm shadow-lg hover:bg-black active:scale-95 transition-all disabled:opacity-50 mt-2"
+                >
+                  {loading ? "Verifying..." : "Log In as Admin"}
+                </button>
+              </motion.form>
+            )}
+          </AnimatePresence>
         </div>
 
-        <button 
-          onClick={onLogin}
-          className="w-full bg-white text-gray-700 border border-gray-200 font-bold py-4 rounded-2xl flex items-center justify-center gap-3 hover:bg-gray-50 transition-all"
-        >
-          <img src="https://www.google.com/favicon.ico" className="w-5 h-5 bg-white rounded-full p-0.5" alt="Google" />
-          Continue with Google
-        </button>
+        {/* 底部切换按钮 */}
+        <div className="mt-8 text-center">
+          <button 
+            onClick={() => {
+              setShowAdminPortal(!showAdminPortal);
+              setError("");
+            }}
+            className="text-xs font-bold text-gray-400 hover:text-gray-600 transition-colors uppercase tracking-widest"
+          >
+            {showAdminPortal ? "← Back to Student Login" : "Staff / Admin Portal"}
+          </button>
+        </div>
 
-        <button 
-          onClick={() => setIsSignUp(!isSignUp)}
-          className="text-primary font-bold text-sm hover:underline"
-        >
-          {isSignUp ? "Already have an account? Login" : "Don't have an account? Sign Up"}
-        </button>
-
-        <p className="text-xs text-gray-400 px-6 pt-4">
-          By continuing, you agree to our Terms of Service and Privacy Policy.
-        </p>
-      </div>
+      </motion.div>
     </div>
   );
 }
