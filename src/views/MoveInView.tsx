@@ -66,7 +66,7 @@ export default function MoveInView({ products, onAddToCart, onProductClick, cart
 
           <h1 className="text-4xl md:text-5xl font-black mb-4 tracking-tighter text-gray-900">Smart Move-In</h1>
           <p className="text-gray-600 text-sm md:text-base mb-10 leading-relaxed font-medium">
-            Select the categories you need for your new dorm or apartment. We'll instantly find the best local deals to help you settle in.
+            Select the categories you need for your new dorm or apartment. It will be there when you move in!
           </p>
 
           <div className="flex items-center gap-2 mb-4">
