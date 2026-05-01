@@ -1,37 +1,30 @@
 import React, { useState, useMemo } from "react";
 import { motion, AnimatePresence } from "motion/react";
-import { ShoppingCart, Search, PackageOpen, Plus, LayoutGrid, Check, Sparkles } from "lucide-react";
-import { Product } from "../types";
+import { ShoppingCart, Search, PackageOpen, Plus, LayoutGrid, Check, Sparkles, ShieldCheck, Truck } from "lucide-react";
+import { Product, UserProfile } from "../types";
 import { cn } from "../utils/classNames";
 
 export interface MoveInViewProps {
   key?: string;
   products: Product[];
+  users: Record<string, UserProfile>;
   onAddToCart: (product: Product) => void;
   onProductClick: (product: Product) => void;
   cartItems: string[];
 }
 
+// 【核心修改】：将 Textbooks 替换为了 Daily Supply
 const MOVE_IN_CATEGORIES = [
-  "Furniture", 
-  "Electronics", 
-  "Appliances", 
-  "Kitchen & Dining", 
-  "Bed & Bath", 
-  "Storage", 
-  "Decor",
-  "Textbooks",
-  "Other"
+  "Furniture", "Electronics", "Appliances", "Kitchen & Dining", 
+  "Bed & Bath", "Storage", "Decor", "Daily Supply", "Other"
 ];
 
-export default function MoveInView({ products, onAddToCart, onProductClick, cartItems }: MoveInViewProps) {
+export default function MoveInView({ products, users, onAddToCart, onProductClick, cartItems }: MoveInViewProps) {
   const [selectedCategories, setSelectedCategories] = useState<string[]>([]);
 
   const toggleCategory = (category: string) => {
     setSelectedCategories(prev => 
-      prev.includes(category) 
-        ? prev.filter(c => c !== category) 
-        : [...prev, category]
+      prev.includes(category) ? prev.filter(c => c !== category) : [...prev, category]
     );
   };
 
@@ -65,9 +58,23 @@ export default function MoveInView({ products, onAddToCart, onProductClick, cart
           </div>
 
           <h1 className="text-4xl md:text-5xl font-black mb-4 tracking-tighter text-gray-900">Smart Move-In</h1>
-          <p className="text-gray-600 text-sm md:text-base mb-10 leading-relaxed font-medium">
-            Select the categories you need for your new dorm or apartment. It will be there when you move in!
+          <p className="text-gray-600 text-sm md:text-base mb-6 leading-relaxed font-medium">
+            Select the categories you need for your new dorm or apartment. We'll instantly find the best local deals to help you settle in.
           </p>
+
+          <div className="bg-white/60 backdrop-blur-sm border border-orange-200/60 rounded-2xl p-4 mb-10 flex items-start gap-4">
+            <div className="w-10 h-10 bg-orange-100 rounded-full flex items-center justify-center text-orange-600 flex-shrink-0">
+              <Truck className="w-5 h-5" />
+            </div>
+            <div>
+              <h4 className="text-sm font-bold text-gray-900 flex items-center gap-1.5">
+                Relo Concierge Delivery
+              </h4>
+              <p className="text-xs text-gray-600 mt-1 leading-relaxed">
+                Items marked with <span className="inline-flex items-center gap-1 bg-orange-500 text-white px-1.5 py-0.5 rounded text-[8px] font-black uppercase tracking-widest mx-1"><ShieldCheck className="w-2.5 h-2.5" /> Official</span> qualify for free early delivery. We'll place them right in your room before you even arrive!
+              </p>
+            </div>
+          </div>
 
           <div className="flex items-center gap-2 mb-4">
             <LayoutGrid className="w-4 h-4 text-orange-400" />
@@ -146,9 +153,10 @@ export default function MoveInView({ products, onAddToCart, onProductClick, cart
           <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-6">
             {(selectedCategories.length === 0 ? products.filter(p => p.status === "Still on").slice(0, 8) : recommendedListings).map(product => {
               const inCart = cartItems.includes(product.id);
+              const isOfficial = users[product.sellerId]?.isAdmin;
+
               return (
                 <div key={product.id} className="bg-white rounded-[32px] p-4 border border-gray-100 shadow-sm hover:shadow-xl hover:shadow-orange-500/5 transition-all group flex flex-col">
-                  {/* 【核心修复】：剥夺图片主动撑破布局的能力，强行锁定比例 */}
                   <div 
                     className="w-full relative pt-[100%] rounded-[24px] overflow-hidden bg-gray-50 mb-4 cursor-pointer"
                     onClick={() => onProductClick(product)}
@@ -158,14 +166,21 @@ export default function MoveInView({ products, onAddToCart, onProductClick, cart
                       alt={product.title} 
                       className="absolute inset-0 w-full h-full object-cover group-hover:scale-110 transition-transform duration-700" 
                     />
-                    <div className="absolute top-3 right-3 bg-white/90 backdrop-blur-md px-2 py-1 rounded-lg text-[10px] font-black text-gray-900 shadow-sm z-10">
+                    
+                    {isOfficial && (
+                      <div className="absolute top-2 left-2 bg-orange-500 text-white px-2 py-1 rounded-md text-[9px] font-black uppercase tracking-widest flex items-center gap-1 z-10 shadow-md pointer-events-none">
+                        <ShieldCheck className="w-3 h-3" /> Official
+                      </div>
+                    )}
+                    
+                    <div className="absolute bottom-3 right-3 bg-white/90 backdrop-blur-md px-2 py-1 rounded-lg text-[10px] font-black text-gray-900 shadow-sm z-10">
                       {product.condition}
                     </div>
                   </div>
                   
                   <div className="flex flex-col flex-1 px-1">
                     <h3 
-                      className="text-sm font-black text-gray-900 truncate mb-1 cursor-pointer hover:text-orange-500 transition-colors"
+                      className="text-sm font-black text-gray-900 line-clamp-2 mb-1 cursor-pointer hover:text-orange-500 transition-colors"
                       onClick={() => onProductClick(product)}
                     >
                       {product.title}

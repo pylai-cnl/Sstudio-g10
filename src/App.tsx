@@ -13,13 +13,11 @@ import {
 import { auth, db } from "./firebase";
 import { Product, UserProfile, View, ChatRoom } from "./types";
 
-// --- Utilities & Shared Components ---
 import { cn } from "./utils/classNames";
 import ErrorBoundary from "./components/ErrorBoundary";
 import NavButton from "./components/NavButton";
 import ConfirmationModal from "./components/ConfirmationModal";
 
-// --- Extracted Views ---
 import AuthView from "./views/AuthView";
 import HomeView from "./views/HomeView";
 import CartView from "./views/CartView";
@@ -34,44 +32,16 @@ import SellerShopView from "./views/SellerShopView";
 import PlatformBuyView from "./views/PlatformBuyView";
 import MoveInView from "./views/MoveInView";
 
-// --- Error Handling Logic ---
-export enum OperationType {
-  CREATE = 'create',
-  UPDATE = 'update',
-  DELETE = 'delete',
-  LIST = 'list',
-  GET = 'get',
-  WRITE = 'write',
-}
-
-export interface FirestoreErrorInfo {
-  error: string;
-  operationType: OperationType;
-  path: string | null;
-  authInfo: any;
-}
+export enum OperationType { CREATE = 'create', UPDATE = 'update', DELETE = 'delete', LIST = 'list', GET = 'get', WRITE = 'write' }
+export interface FirestoreErrorInfo { error: string; operationType: OperationType; path: string | null; authInfo: any; }
 
 export function handleFirestoreError(error: unknown, operationType: OperationType, path: string | null) {
-  const errInfo: FirestoreErrorInfo = {
-    error: error instanceof Error ? error.message : String(error),
-    authInfo: {
-      userId: auth.currentUser?.uid,
-      email: auth.currentUser?.email
-    },
-    operationType,
-    path
-  };
+  const errInfo: FirestoreErrorInfo = { error: error instanceof Error ? error.message : String(error), authInfo: { userId: auth.currentUser?.uid, email: auth.currentUser?.email }, operationType, path };
   console.error('Firestore Error: ', JSON.stringify(errInfo));
   throw new Error(JSON.stringify(errInfo));
 }
 
-export default function App() {
-  return (
-    <ErrorBoundary>
-      <AppContent />
-    </ErrorBoundary>
-  );
-}
+export default function App() { return <ErrorBoundary><AppContent /></ErrorBoundary>; }
 
 function AppContent() {
   const [user, setUser] = useState<FirebaseUser | null>(null);
@@ -83,11 +53,8 @@ function AppContent() {
   const [defaultAddrIndex, setDefaultAddrIndex] = useState(0);
   const [payments, setPayments] = useState<any[]>([]);
   const [defaultPayIndex, setDefaultPayIndex] = useState(0);
-  
-  // 统一的成功弹窗状态
   const [showSuccessModal, setShowSuccessModal] = useState(false);
   const [successMessage, setSuccessMessage] = useState("");
-
   const [products, setProducts] = useState<Product[]>([]);
   const [users, setUsers] = useState<Record<string, UserProfile>>({});
   const [searchQuery, setSearchQuery] = useState("");
@@ -98,9 +65,7 @@ function AppContent() {
   const [showSellOptions, setShowSellOptions] = useState(false);
   const [chatRooms, setChatRooms] = useState<ChatRoom[]>([]);
   const [loading, setLoading] = useState(true);
-  const [modalConfig, setModalConfig] = useState({
-    isOpen: false, title: "", message: "", onConfirm: () => {}, confirmText: "OK", type: "primary" as "primary" | "danger", isAlert: false
-  });
+  const [modalConfig, setModalConfig] = useState({ isOpen: false, title: "", message: "", onConfirm: () => {}, confirmText: "OK", type: "primary" as "primary" | "danger", isAlert: false });
 
   const showConfirm = (config: any) => setModalConfig({ ...config, isOpen: true, isAlert: false });
   const showAlert = (title: string, message: string) => setModalConfig({ isOpen: true, title, message, onConfirm: () => {}, confirmText: "OK", type: "primary", isAlert: true });
@@ -108,16 +73,12 @@ function AppContent() {
   const ensurePrivateProfileDoc = async (firebaseUser: FirebaseUser) => {
     const userPrivateDocRef = doc(db, "users_private", firebaseUser.uid);
     const userPrivateDoc = await getDoc(userPrivateDocRef);
-    if (!userPrivateDoc.exists()) {
-      await setDoc(userPrivateDocRef, { email: firebaseUser.email || "", favorites: [], cart: [] });
-    }
+    if (!userPrivateDoc.exists()) await setDoc(userPrivateDocRef, { email: firebaseUser.email || "", favorites: [], cart: [] });
     return userPrivateDocRef;
   };
 
   const updateProductStatusSafely = async (product: Product, nextStatus: Product["status"]) => {
     if (!user) throw new Error("You must be logged in.");
-    
-    // 识别管理员身份
     const isSuperAdmin = user.email === "relo@relo.com";
 
     await runTransaction(db, async (transaction) => {
@@ -134,15 +95,12 @@ function AppContent() {
         updates.buyerId = user.uid;
         updates.buyerName = profile?.displayName || user.displayName || user.email?.split("@")[0] || "Buyer";
         updates.sellerNotified = false;
-      } 
-      // 【新增】：支持从 Pending 转为 Shipped
-      else if (nextStatus === "Shipped") {
+      } else if (nextStatus === "Shipped") {
         if (latest.status !== "Pending") throw new Error("Order must be pending to be shipped.");
         if (latest.sellerId !== user.uid && !isSuperAdmin) throw new Error("Only the seller or admin can mark as shipped.");
         updates.status = "Shipped";
         updates.shippedAt = new Date().toISOString();
-      }
-      else if (nextStatus === "Delivered") {
+      } else if (nextStatus === "Delivered") {
         if (!["Pending", "Shipped"].includes(latest.status)) throw new Error("Invalid status transition.");
         if (latest.sellerId !== user.uid && !isSuperAdmin) throw new Error("Only the seller can mark as delivered.");
         updates.status = "Delivered";
@@ -197,7 +155,6 @@ function AppContent() {
           } else {
             const existingData = userDoc.data();
             const existingPrivateData = userPrivateDoc.data() || { email, favorites: [], cart: [] };
-            // 管理员身份强行覆盖
             if (existingData.isAdmin !== isAdmin) await updateDoc(userDocRef, { isAdmin });
             setProfile({ uid: user.uid, ...existingData, ...existingPrivateData, isAdmin, ...(user.photoURL ? { photoURL: user.photoURL } : {}) } as UserProfile);
           }
@@ -261,9 +218,14 @@ function AppContent() {
   const filteredProducts = useMemo(() => {
     return products.filter(p => {
       const search = (searchQuery || "").toLowerCase();
+      
+      // 【核心修改】：过滤掉 isOfficialClone 标记的克隆商品，确保它们不污染首页
+      const isClone = (p as any).isOfficialClone === true;
+
       return ((p.title || "").toLowerCase().includes(search) || (p.description || "").toLowerCase().includes(search)) &&
              (selectedCategory === "All" || p.category === selectedCategory) &&
-             (p.status === "Still on");
+             (p.status === "Still on") && 
+             (!isClone);
     });
   }, [products, searchQuery, selectedCategory]);
 
@@ -280,8 +242,6 @@ function AppContent() {
     if (!user || !profile) return;
     if ((profile.cart || []).includes(productId)) return showAlert("Already in Cart", "Item is already in cart.");
     await setDoc(doc(db, "users_private", user.uid), { email: user.email || "", cart: [...(profile.cart || []), productId] }, { merge: true });
-    
-    // 【修改】：加入购物车后显示绿勾勾
     setSuccessMessage("Item added to your cart!");
     setShowSuccessModal(true);
   };
@@ -289,6 +249,46 @@ function AppContent() {
   const removeFromCart = async (productId: string) => {
     if (!user || !profile) return;
     await setDoc(doc(db, "users_private", user.uid), { email: user.email || "", cart: (profile.cart || []).filter(id => id !== productId) }, { merge: true });
+  };
+
+  const sendSystemMessage = async (productId: string, sellerId: string, buyerId: string, text: string, asAdminConcierge = false) => {
+    if (!user) return;
+    const product = products.find(p => p.id === productId);
+    if (!product) return;
+    let room = chatRooms.find(r => r.productId === productId && r.participants.includes(sellerId) && r.participants.includes(buyerId));
+    const now = new Date().toISOString();
+    let roomId = room?.id;
+
+    if (!room) {
+      const docRef = await addDoc(collection(db, "chatRooms"), { 
+        participants: [sellerId, buyerId], 
+        productId: product.id, 
+        productTitle: product.title, 
+        productImage: product.images?.[0] || "", 
+        lastMessage: text, 
+        lastMessageAt: now, 
+        unreadBy: [asAdminConcierge ? buyerId : sellerId]
+      });
+      roomId = docRef.id;
+    } else {
+      await updateDoc(doc(db, "chatRooms", room.id), { 
+        lastMessage: text, 
+        lastMessageAt: now, 
+        unreadBy: Array.from(new Set([...(room.unreadBy || []), asAdminConcierge ? buyerId : sellerId])) 
+      });
+    }
+
+    if (roomId) {
+      const msgSenderId = asAdminConcierge ? sellerId : user.uid;
+      const msgSenderName = asAdminConcierge ? "Relo Concierge" : (profile?.displayName || "System");
+
+      await addDoc(collection(db, "chatRooms", roomId, "messages"), { 
+        senderId: msgSenderId, 
+        senderName: msgSenderName, 
+        text, 
+        createdAt: now 
+      });
+    }
   };
 
   const checkout = async () => {
@@ -303,9 +303,29 @@ function AppContent() {
       onConfirm: async () => {
         try {
           await Promise.all(cartProducts.map(p => updateProductStatusSafely(p, "Pending")));
+          
           for (const p of cartProducts) {
-            await sendSystemMessage(p.id, p.sellerId, user.uid, `Your item "${p.title}" was purchased by ${profile.displayName}.`);
+            const isReloOfficial = users[p.sellerId]?.isAdmin;
+            
+            if (isReloOfficial) {
+              await sendSystemMessage(
+                p.id, 
+                p.sellerId, 
+                user.uid, 
+                `🎉 Order Confirmed: "${p.title}". As a Relo Official item, this qualifies for Early Delivery! Please reply with your exact arrival date and time so our concierge team can place it in your room before you move in.`, 
+                true
+              );
+            } else {
+              await sendSystemMessage(
+                p.id, 
+                p.sellerId, 
+                user.uid, 
+                `I just purchased your item "${p.title}". Please let me know when you can deliver it!`, 
+                false
+              );
+            }
           }
+
           await updateDoc(doc(db, "users_private", user.uid), { cart: [] });
           setSuccessMessage("Orders placed successfully!");
           setShowSuccessModal(true);
@@ -313,23 +333,6 @@ function AppContent() {
         } catch (error: any) { showAlert("Checkout Error", error.message || "Checkout failed."); }
       }
     });
-  };
-
-  const sendSystemMessage = async (productId: string, sellerId: string, buyerId: string, text: string) => {
-    if (!user) return;
-    const product = products.find(p => p.id === productId);
-    if (!product) return;
-    let room = chatRooms.find(r => r.productId === productId && r.participants.includes(sellerId) && r.participants.includes(buyerId));
-    const now = new Date().toISOString();
-    let roomId = room?.id;
-
-    if (!room) {
-      const docRef = await addDoc(collection(db, "chatRooms"), { participants: [sellerId, buyerId], productId, productTitle: product.title, productImage: product.images?.[0] || "", lastMessage: text, lastMessageAt: now, unreadBy: [sellerId] });
-      roomId = docRef.id;
-    } else {
-      await updateDoc(doc(db, "chatRooms", room.id), { lastMessage: text, lastMessageAt: now, unreadBy: Array.from(new Set([...(room.unreadBy || []), sellerId])) });
-    }
-    if (roomId) await addDoc(collection(db, "chatRooms", roomId, "messages"), { senderId: user.uid, senderName: profile?.displayName || "System", text, createdAt: now });
   };
 
   const updateProfile = async (data: Partial<UserProfile>, silent = false) => {
@@ -380,7 +383,6 @@ function AppContent() {
                 {showSellOptions && (
                   <motion.div initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: 10 }} className="absolute top-full right-0 mt-2 w-48 bg-white rounded-2xl shadow-2xl border border-black/5 overflow-hidden z-[60]">
                     <button onClick={() => handleViewChange("sell")} className="w-full px-4 py-3 text-left hover:bg-gray-50 flex items-center gap-3"><PlusCircle className="w-5 h-5 text-primary" /><span className="text-sm font-bold">Add Item</span></button>
-                    {/* 修复点：My Shop 入口强制清空 selectedSellerId 以防看到别人的店铺 */}
                     <button onClick={() => { setSelectedSellerId(null); handleViewChange("seller_shop"); setShowSellOptions(false); }} className="w-full px-4 py-3 text-left hover:bg-gray-50 flex items-center gap-3 border-t border-gray-50"><Package className="w-5 h-5 text-primary" /><span className="text-sm font-bold">My Shop</span></button>
                   </motion.div>
                 )}
@@ -390,19 +392,28 @@ function AppContent() {
         </div>
       </header>
 
+      <nav className="md:hidden bg-white px-4 py-3 flex items-center gap-3 border-b border-gray-100 sticky top-0 z-50">
+        <h1 onClick={() => handleViewChange("home")} className="text-primary font-black text-2xl tracking-tighter cursor-pointer">Relo</h1>
+        <div className="flex-1 relative">
+          <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400" />
+          <input type="text" placeholder="Search..." className="w-full bg-gray-100 rounded-full py-2 pl-10 pr-4 text-sm outline-none" value={searchQuery} onChange={e => setSearchQuery(e.target.value)} />
+        </div>
+        <button onClick={() => handleViewChange("cart")} className="relative p-2 text-gray-600">
+          <ShoppingCart className="w-6 h-6" />
+          {profile?.cart?.length ? <span className="absolute -top-1 -right-1 w-5 h-5 bg-primary text-white text-[10px] font-bold rounded-full flex items-center justify-center border-2 border-white">{profile.cart.length}</span> : null}
+        </button>
+      </nav>
+
       <main className="flex-1 overflow-y-auto pb-24 md:pb-10 hide-scrollbar">
         <div className="max-w-7xl mx-auto">
           <AnimatePresence mode="wait">
             {view === "home" && <HomeView key="home" products={filteredProducts} users={users} selectedCategory={selectedCategory} onSelectCategory={setSelectedCategory} onSelectProduct={(p) => { setSelectedProduct(p); handleViewChange("detail"); }} favorites={profile?.favorites || []} onToggleFavorite={toggleFavorite} onViewSellerShop={(sid) => { setSelectedSellerId(sid); handleViewChange("seller_shop"); }} />}
-            {view === "move_in" && <MoveInView key="move_in" products={products} cartItems={profile?.cart || []} onAddToCart={(p) => { addToCart(p.id); }} onProductClick={(p) => { setSelectedProduct(p); handleViewChange("detail"); }} />}
-            {view === "cart" && <CartView key="cart" products={products.filter(p => profile?.cart?.includes(p.id))} onSelectProduct={(p) => { setSelectedProduct(p); handleViewChange("detail"); }} onRemoveFromCart={removeFromCart} onCheckout={checkout} onBack={goBack} />}
+            {view === "move_in" && <MoveInView key="move_in" products={products} users={users} cartItems={profile?.cart || []} onAddToCart={(p) => { addToCart(p.id); }} onProductClick={(p) => { setSelectedProduct(p); handleViewChange("detail"); }} />}
+            {view === "cart" && <CartView key="cart" products={products.filter(p => profile?.cart?.includes(p.id))} users={users} onSelectProduct={(p) => { setSelectedProduct(p); handleViewChange("detail"); }} onRemoveFromCart={removeFromCart} onCheckout={checkout} onBack={goBack} />}
             {view === "sell" && <SellView key="sell" onSuccess={() => handleViewChange("home")} onBack={goBack} profile={profile} showAlert={showAlert} />}
             {view === "platform_buy" && <PlatformBuyView key="platform_buy" onSuccess={() => handleViewChange("home")} onBack={goBack} profile={profile} showAlert={showAlert} />}
             {view === "profile" && <ProfileView key="profile" profile={profile} products={products} users={users} onLogout={handleLogout} onSelectProduct={(p) => { setSelectedProduct(p); handleViewChange("detail"); }} favorites={profile?.favorites || []} onToggleFavorite={toggleFavorite} onManageOrders={() => handleViewChange("orders")} onUpdateProfile={updateProfile} setShowSuccessModal={setShowSuccessModal} showAlert={showAlert} onViewSellerShop={(sid) => { setSelectedSellerId(sid); handleViewChange("seller_shop"); }} setIsDirty={setIsDirty} showConfirm={showConfirm} addresses={addresses} setAddresses={setAddresses} defaultAddrIndex={defaultAddrIndex} setDefaultAddrIndex={setDefaultAddrIndex} payments={payments} setPayments={setPayments} defaultPayIndex={defaultPayIndex} setDefaultPayIndex={setDefaultPayIndex} />}
-            
-            {/* 统一的订单管理页，强制刷新 key */}
             {view === "orders" && <ManageOrdersView key={`orders-${user?.uid}`} products={products} users={users} chatRooms={chatRooms} currentUser={user} onBack={goBack} onSelectProduct={(p) => { setSelectedProduct(p); handleViewChange("detail"); }} showAlert={showAlert} onSendSystemMessage={sendSystemMessage} onViewSellerShop={(sid) => { setSelectedSellerId(sid); handleViewChange("seller_shop"); }} />}
-            
             {view === "detail" && selectedProduct && <ProductDetailView key={`detail-${selectedProduct.id}`} product={selectedProduct} users={users} currentUser={user} sellerTransactionCount={products.filter(p => p.sellerId === selectedProduct.sellerId && (p.status === "Completed" || p.status === "Sold")).length} onViewSellerShop={(sid) => { setSelectedSellerId(sid); handleViewChange("seller_shop"); }} onBack={goBack} onStatusChange={async (id, status) => { try { await updateProductStatusSafely(selectedProduct, status); setSelectedProduct(prev => prev ? { ...prev, status } : null); } catch (error) { showAlert("Error", "Update failed."); } }} onDelete={async (id) => { showConfirm({ title: "Delete?", message: "Cannot be undone.", type: "danger", onConfirm: async () => { await deleteDoc(doc(db, "products", id)); setSelectedProduct(null); handleViewChange("home"); }}); }} onUpdate={async (id, data) => { await updateDoc(doc(db, "products", id), data); setSelectedProduct(prev => prev ? { ...prev, ...data } : null); }} onContactSeller={(p) => { if (p.sellerId !== user.uid) { const existing = chatRooms.find(r => r.productId === p.id && r.participants.includes(user.uid) && r.participants.includes(p.sellerId)); if (existing) { setSelectedChatRoom(existing); handleViewChange("chat_room"); } else { addDoc(collection(db, "chatRooms"), { participants: [user.uid, p.sellerId], productId: p.id, productTitle: p.title, productImage: p.images?.[0] || "", lastMessage: "Chat started", lastMessageAt: new Date().toISOString(), unreadBy: [p.sellerId] }).then(ref => { setSelectedChatRoom({ id: ref.id, participants: [user.uid, p.sellerId], productId: p.id, productTitle: p.title, productImage: p.images?.[0] || "" }); handleViewChange("chat_room"); }); } } else showAlert("Error", "Can't chat with yourself"); }} onAddToCart={(p) => addToCart(p.id)} isOwner={selectedProduct.sellerId === user.uid} showAlert={showAlert} isFavorite={profile?.favorites?.includes(selectedProduct.id) || false} onToggleFavorite={toggleFavorite} />}
             {view === "chat" && <UnifiedMessagesView key="chat" rooms={chatRooms} onSelectRoom={(r) => setSelectedChatRoom(r)} selectedRoom={selectedChatRoom} currentUser={user} profile={profile} users={users} onViewSellerShop={(sid) => { setSelectedSellerId(sid); handleViewChange("seller_shop"); }} products={products} onSelectProduct={(p) => { setSelectedProduct(p); handleViewChange("detail"); }} />}
             {view === "chat_room" && selectedChatRoom && <UnifiedMessagesView key="chat_room" rooms={chatRooms} onSelectRoom={(r) => setSelectedChatRoom(r)} selectedRoom={selectedChatRoom} currentUser={user} profile={profile} users={users} onViewSellerShop={(sid) => { setSelectedSellerId(sid); handleViewChange("seller_shop"); }} products={products} onSelectProduct={(p) => { setSelectedProduct(p); handleViewChange("detail"); }} />}
@@ -448,7 +459,7 @@ function AppContent() {
               <div className="w-20 h-20 bg-green-50 rounded-full flex items-center justify-center mx-auto mb-6"><CheckCircle className="w-8 h-8 text-green-500" /></div>
               <h3 className="text-2xl font-bold mb-2">Success</h3>
               {successMessage && <p className="text-sm text-gray-500 mb-2 font-medium">{successMessage}</p>}
-              <button onClick={() => setShowSuccessModal(false)} className="w-full py-4 bg-primary text-white font-bold rounded-2xl hover:bg-primary-hover mt-4">OK</button>
+              <button onClick={() => setShowSuccessModal(false)} className="w-full py-4 bg-primary text-white font-bold rounded-2xl hover:bg-primary-hover mt-4 transition-colors">OK</button>
             </motion.div>
           </div>
         )}

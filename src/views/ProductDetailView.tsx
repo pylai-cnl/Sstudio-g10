@@ -3,13 +3,13 @@ import { motion } from "motion/react";
 import { 
   ChevronLeft, X, Pencil, Trash2, Camera, 
   MapPin, ExternalLink, MessageCircle, CheckCircle,
-  Heart as HeartIcon, ShieldCheck, Truck, Clock
+  Heart as HeartIcon, ShieldCheck, Truck, Clock, Sparkles
 } from "lucide-react";
 import { User as FirebaseUser } from "firebase/auth";
 import { Product, UserProfile } from "../types";
 import { cn } from "../utils/classNames";
 import StatusBadge from "../components/StatusBadge";
-import { updateDoc, doc } from "firebase/firestore";
+import { updateDoc, doc, addDoc, collection } from "firebase/firestore";
 import { db } from "../firebase";
 
 export interface ProductDetailViewProps {
@@ -31,6 +31,14 @@ export interface ProductDetailViewProps {
   onViewSellerShop: (sellerId: string) => void;
 }
 
+// 【新增】：定义 Bundle 可选配件及其价格
+const BUNDLE_ADDONS = [
+  { id: "notebook", name: "Premium Notebook x2", price: 5 },
+  { id: "highlighter", name: "Highlighter Set (5 colors)", price: 4 },
+  { id: "stapler", name: "Mini Stapler + Staples", price: 3 },
+  { id: "calc", name: "Scientific Calculator", price: 15 },
+];
+
 export default function ProductDetailView({ 
   product, users, currentUser, onBack, onStatusChange, onDelete, onUpdate,
   onContactSeller, onAddToCart, isOwner, showAlert, isFavorite, onToggleFavorite,
@@ -44,8 +52,12 @@ export default function ProductDetailView({
 
   const currUserProfile = currentUser ? users[currentUser.uid] : null;
   const isSuperAdmin = currentUser?.email === "relo@relo.com" || currUserProfile?.isAdmin;
+  const isOfficialSeller = users[product.sellerId]?.isAdmin;
   
   const canEdit = (isOwner || isSuperAdmin) && product.status === "Still on";
+
+  // 【智能识别】：如果是管方发的包含"Stationary Bundle"字样的商品，激活定制页面
+  const isStationaryBundle = product.title.toLowerCase().includes("stationary") && product.title.toLowerCase().includes("bundle");
 
   const [activeImage, setActiveImage] = useState(0);
   const [isEditing, setIsEditing] = useState(false);
@@ -59,6 +71,15 @@ export default function ProductDetailView({
 
   const [showShippingModal, setShowShippingModal] = useState(false);
   const [trackingInfo, setTrackingInfo] = useState("");
+
+  // 【新增】：存放用户选中的配件状态
+  const [selectedAddons, setSelectedAddons] = useState<string[]>([]);
+  const [addingToCart, setAddingToCart] = useState(false);
+
+  // 动态计算显示的总价（基础价 + 配件价）
+  const displayPrice = isStationaryBundle 
+    ? product.price + selectedAddons.reduce((sum, id) => sum + BUNDLE_ADDONS.find(a => a.id === id)!.price, 0)
+    : product.price;
 
   const handleUpdate = async () => {
     setIsSaving(true);
@@ -94,6 +115,42 @@ export default function ProductDetailView({
     }
   };
 
+  // 【核心克隆引擎】：处理加入购物车逻辑
+  const handleAddToCartAction = async () => {
+    // 如果是官方账号（包括你）买/测试这个商品，我们触发克隆保护机制
+    if (isOfficialSeller) {
+      setAddingToCart(true);
+      try {
+        let addonText = "";
+        if (isStationaryBundle && selectedAddons.length > 0) {
+          const names = selectedAddons.map(id => BUNDLE_ADDONS.find(a => a.id === id)?.name);
+          addonText = ` (+ ${names.join(", ")})`;
+        }
+        
+        // 静默生成一个只属于该用户的"克隆专属订单商品"
+        const cloneData = {
+          ...product,
+          title: product.title + addonText,
+          price: displayPrice,
+          isOfficialClone: true, // 核心标记：打上隐身标签
+          createdAt: new Date().toISOString()
+        };
+        
+        const docRef = await addDoc(collection(db, "products"), cloneData);
+        // 把克隆出来的这个新商品交给购物车
+        onAddToCart({ ...cloneData, id: docRef.id } as Product);
+      } catch (e) { 
+        console.error(e);
+        showAlert("Error", "Failed to add to cart.");
+      } finally { 
+        setAddingToCart(false); 
+      }
+    } else {
+      // 如果不是官方商品，走正常的 C2C 原样进购物车流程
+      onAddToCart(product);
+    }
+  };
+
   return (
     <motion.div initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: 20 }} className="bg-white min-h-full relative pb-32">
       <div className="sticky top-0 z-30 bg-white border-b border-gray-100 px-4 py-3 flex items-center justify-between">
@@ -109,14 +166,9 @@ export default function ProductDetailView({
       </div>
 
       <div className="grid grid-cols-1 md:grid-cols-2 gap-8 pt-2">
-        {/* 【核心修复】：使用 w-full pt-[100%] 和 absolute inset-0 彻底封死图片的拉伸 */}
         <div className="w-full relative pt-[100%] bg-gray-100 md:rounded-2xl overflow-hidden md:m-6">
           {product.images?.[activeImage] ? (
-            <img 
-              src={product.images[activeImage]} 
-              className="absolute inset-0 w-full h-full object-cover" 
-              alt="item" 
-            />
+            <img src={product.images[activeImage]} className="absolute inset-0 w-full h-full object-cover" alt="item" />
           ) : (
             <div className="absolute inset-0 flex items-center justify-center text-gray-300">
               <Camera className="w-12 h-12" />
@@ -125,11 +177,7 @@ export default function ProductDetailView({
           {product.images?.length > 1 && (
             <div className="absolute bottom-4 left-0 right-0 flex justify-center gap-2 z-10">
               {product.images.map((_, i) => (
-                <button 
-                  key={i} 
-                  onClick={() => setActiveImage(i)} 
-                  className={cn("w-2 h-2 rounded-full transition-all shadow-sm", activeImage === i ? "bg-primary w-4" : "bg-white/70 hover:bg-white")} 
-                />
+                <button key={i} onClick={() => setActiveImage(i)} className={cn("w-2 h-2 rounded-full transition-all shadow-sm", activeImage === i ? "bg-primary w-4" : "bg-white/70 hover:bg-white")} />
               ))}
             </div>
           )}
@@ -155,9 +203,9 @@ export default function ProductDetailView({
                 <div className="flex justify-between items-start gap-4">
                   <h1 className="text-2xl font-black text-gray-900 flex items-center gap-2">
                     {product.title}
-                    {seller?.isAdmin && <span className="bg-orange-500 text-white px-2 py-0.5 rounded-lg text-[10px] font-black uppercase tracking-widest flex items-center gap-1 shadow-sm"><ShieldCheck className="w-3 h-3" /> Official Relo</span>}
+                    {isOfficialSeller && <span className="bg-orange-500 text-white px-2 py-0.5 rounded-lg text-[10px] font-black uppercase tracking-widest flex items-center gap-1 shadow-sm"><ShieldCheck className="w-3 h-3" /> Official Relo</span>}
                   </h1>
-                  <span className="text-2xl font-black text-primary">${product.price}</span>
+                  <span className="text-2xl font-black text-primary">${displayPrice}</span>
                 </div>
                 <div className="flex flex-wrap gap-2">
                   <span className="bg-gray-100 text-gray-600 px-3 py-1 rounded-lg text-xs font-bold uppercase tracking-wider">{product.category}</span>
@@ -165,18 +213,44 @@ export default function ProductDetailView({
                 </div>
               </div>
 
+              {/* 【特色功能面板】：如果是官方 Bundle 且当前用户不是拥有者，开放定制面板 */}
+              {isStationaryBundle && !isOwner && product.status === "Still on" && (
+                <div className="bg-orange-50 border border-orange-100 rounded-3xl p-5 space-y-4">
+                  <h4 className="font-black text-orange-900 flex items-center gap-2">
+                    <Sparkles className="w-5 h-5 text-orange-500" />
+                    Customize Your Bundle
+                  </h4>
+                  <p className="text-xs text-orange-800/70 leading-relaxed font-medium">
+                    The base bundle includes an eraser, a mechanical pencil, two notebooks, and a gel pen. Select additional items below to add to your package!
+                  </p>
+                  <div className="space-y-2">
+                    {BUNDLE_ADDONS.map(addon => (
+                      <label key={addon.id} className="flex items-center justify-between p-3 bg-white rounded-xl border border-orange-100 cursor-pointer hover:border-orange-300 transition-colors shadow-sm select-none">
+                        <div className="flex items-center gap-3">
+                          <input 
+                            type="checkbox" 
+                            className="w-4 h-4 rounded text-orange-500 focus:ring-orange-500"
+                            checked={selectedAddons.includes(addon.id)}
+                            onChange={(e) => {
+                              if (e.target.checked) setSelectedAddons(prev => [...prev, addon.id]);
+                              else setSelectedAddons(prev => prev.filter(id => id !== addon.id));
+                            }}
+                          />
+                          <span className="text-sm font-bold text-gray-700">{addon.name}</span>
+                        </div>
+                        <span className="text-sm font-black text-orange-500">+${addon.price}</span>
+                      </label>
+                    ))}
+                  </div>
+                </div>
+              )}
+
               <div className="flex items-center gap-3 bg-gray-50 p-3 rounded-2xl">
                 <div className="w-10 h-10 bg-white rounded-xl flex items-center justify-center text-primary shadow-sm"><MapPin className="w-5 h-5" /></div>
                 <div><p className="text-[10px] text-gray-400 font-bold uppercase">Location</p><p className="text-xs font-bold text-gray-700">{product.dormLocation}</p></div>
               </div>
 
               <div className="space-y-2"><h3 className="font-bold text-gray-900">Description</h3><p className="text-gray-600 text-sm leading-relaxed whitespace-pre-wrap">{product.description}</p></div>
-
-              {product.referenceLink && (
-                <a href={product.referenceLink} target="_blank" rel="noopener noreferrer" className="flex items-center gap-2 text-sm text-blue-500 font-bold hover:underline">
-                  <ExternalLink className="w-4 h-4" /> Reference Link
-                </a>
-              )}
             </>
           )}
 
@@ -186,8 +260,8 @@ export default function ProductDetailView({
             <div className="flex items-center gap-3">
               <div className="w-12 h-12 rounded-2xl overflow-hidden shadow-sm"><img src={sellerAvatar} className="w-full h-full object-cover" alt="seller" /></div>
               <div>
-                <h4 className="font-bold text-gray-900 flex items-center gap-2">{sellerName}{seller?.isAdmin && <span className="bg-black text-white px-2 py-0.5 rounded text-[10px] font-black uppercase tracking-widest shadow-sm">Relo Moderator</span>}</h4>
-                <p className="text-xs text-gray-400">{seller?.isAdmin ? "Platform Administrator" : (sellerIsStudent ? "Verified Student • Cornell" : "Community Member")}</p>
+                <h4 className="font-bold text-gray-900 flex items-center gap-2">{sellerName}{isOfficialSeller && <span className="bg-black text-white px-2 py-0.5 rounded text-[10px] font-black uppercase tracking-widest shadow-sm">Relo Moderator</span>}</h4>
+                <p className="text-xs text-gray-400">{isOfficialSeller ? "Platform Administrator" : (sellerIsStudent ? "Verified Student • Cornell" : "Community Member")}</p>
               </div>
             </div>
             <div className="text-right"><p className="text-primary font-black text-lg">{sellerTransactionCount}</p><p className="text-[10px] text-gray-400 font-bold uppercase">Sales</p></div>
@@ -224,12 +298,20 @@ export default function ProductDetailView({
             </div>
           )}
 
-          {!isOwner && !isSuperAdmin && (
+          {!isOwner && (
             <div className="pt-4">
               {product.status === "Still on" ? (
                 <div className="grid grid-cols-2 gap-3">
                   <button onClick={() => onContactSeller(product)} className="btn-primary flex items-center justify-center gap-2"><MessageCircle className="w-5 h-5" />Contact</button>
-                  <button onClick={() => onAddToCart(product)} className="bg-black text-white font-bold py-3 px-6 rounded-xl hover:bg-gray-800">Add to Cart</button>
+                  {/* 【克隆下单入口】：使用新的 handleAddToCartAction 替代直接 onAddToCart */}
+                  <button 
+                    onClick={handleAddToCartAction} 
+                    disabled={addingToCart}
+                    className="bg-black text-white font-bold py-3 px-6 rounded-xl hover:bg-gray-800 flex items-center justify-center gap-2"
+                  >
+                    {addingToCart && <div className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin" />}
+                    Add to Cart
+                  </button>
                 </div>
               ) : product.buyerId === currentUser?.uid ? (
                 <div className="w-full p-4 bg-gray-50 border border-gray-100 rounded-3xl flex flex-col items-center gap-4 text-center">
